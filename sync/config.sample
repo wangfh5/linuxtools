@@ -1,0 +1,46 @@
+# 全局同步配置文件
+# 这些设置会被项目特定的 .sync_config 文件覆盖
+
+# 默认远程服务器
+DEFAULT_REMOTE_HOST="phyxxy-wfh@sydata.hpc.sjtu.edu.cn"
+DEFAULT_REMOTE_BASE="/dssg/home/acct-phyxxy/phyxxy-wfh"
+
+# 默认同步模式
+DEFAULT_MODE="push"
+
+# 可以为不同类型的项目定义不同的排除规则
+# 在项目的 .sync_config 中可以选择使用这些预定义规则
+
+# Fortran 项目排除规则
+EXCLUDES_FORTRAN=(
+    "--exclude=*.o"
+    "--exclude=*.mod"
+    "--exclude=*.a"
+    "--exclude=*.so"
+)
+
+# Python 项目排除规则  
+EXCLUDES_PYTHON=(
+    "--exclude=__pycache__/"
+    "--exclude=*.pyc"
+    "--exclude=*.pyo"
+    "--exclude=.pytest_cache/"
+    "--exclude=venv/"
+    "--exclude=.venv/"
+)
+
+# C/C++ 项目排除规则
+EXCLUDES_CPP=(
+    "--exclude=*.o"
+    "--exclude=*.a"
+    "--exclude=*.so"
+    "--exclude=build/"
+    "--exclude=cmake-build-*/"
+)
+
+# 通用排除规则
+EXCLUDES_COMMON=(
+    "--exclude=.git/"
+    "--exclude=.DS_Store"
+    "--exclude=Thumbs.db"
+)

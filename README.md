@@ -62,6 +62,21 @@ sync-remote -h
 2. 用户配置：`~/.sync_config`
 3. 全局配置：`~/.config/sync_to_remote/config`
 
+### 初始配置
+
+首次使用前，建议复制配置示例文件到用户目录：
+
+```bash
+# 创建配置目录
+mkdir -p ~/.config/sync_to_remote
+
+# 复制配置示例
+cp /home/wangfh5/Projects/tools/sync/config.sample ~/.config/sync_to_remote/config
+
+# 编辑配置文件，修改服务器地址等信息
+vim ~/.config/sync_to_remote/config
+```
+
 ## 添加新工具
 
 1. 在对应分类目录下创建脚本
