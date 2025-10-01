@@ -73,6 +73,33 @@ sync-remote -n
 sync-remote -h
 ```
 
+## SSH 配置（推荐）
+
+**最佳实践**：在 `~/.ssh/config` 中配置服务器，然后在 sync-remote 中使用别名。
+
+### 示例：配置超算服务器
+
+**1. 编辑 `~/.ssh/config`：**
+```ssh-config
+Host scnet
+    HostName lasg02.hpccube.com
+    Port 65032
+    User acn16ba0cj
+    IdentityFile ~/.ssh/acn16ba0cj_lasg02.hpccube.com_RsaKeyExpireTime_2025-11-25_11-22-10.txt
+```
+
+**2. 在 sync-remote 配置中使用别名：**
+```bash
+# ~/.config/sync_to_remote/config
+DEFAULT_REMOTE_HOST="scnet"  # 引用 SSH alias
+DEFAULT_REMOTE_BASE="/dssg/home/acct-phyxxy/phyxxy-wfh"
+```
+
+**优势：**
+- ✅ 一处配置，多工具复用（ssh、scp、rsync 都能用）
+- ✅ 端口、密钥、用户名都在 SSH config 中管理
+- ✅ 配置简洁，易于维护
+
 ## 配置文件
 
 工具支持两级配置，按优先级从高到低：
@@ -105,8 +132,12 @@ sync-remote -h
 ### 主要配置项
 
 **基础配置：**
-- `DEFAULT_REMOTE_HOST`: 远程服务器地址（如 `user@host.com`）
+- `DEFAULT_REMOTE_HOST`: 远程服务器地址
+  - 方式1（推荐）：使用 `~/.ssh/config` 中的 Host alias（如 `scnet`）
+  - 方式2：使用完整地址（如 `user@host.com`）
 - `DEFAULT_REMOTE_BASE`: 远程基础目录
+- `DEFAULT_REMOTE_PORT`: SSH 端口（默认 `22`，仅在方式2下需要配置）
+- `DEFAULT_SSH_IDENTITY_FILE`: SSH 密钥文件路径（可选，使用 alias 时自动读取）
 - `DEFAULT_MODE`: 默认同步模式（`push`/`pull`/`copy-push`/`copy-pull`）
 
 **排除规则配置：**

@@ -8,8 +8,16 @@
 # ============================================================================
 
 # 如果项目需要同步到不同的服务器，可以在此覆盖
+
+# 方式1: 使用 SSH alias（推荐，简洁）
+# DEFAULT_REMOTE_HOST="scnet"  # ~/.ssh/config 中的别名
+# DEFAULT_REMOTE_BASE="/path/to/project"
+
+# 方式2: 完整配置
 # DEFAULT_REMOTE_HOST="user@different-server.com"
 # DEFAULT_REMOTE_BASE="/path/to/different/base"
+# DEFAULT_REMOTE_PORT="2222"  # 非标准 SSH 端口
+# DEFAULT_SSH_IDENTITY_FILE="~/.ssh/special_key.txt"  # 特定密钥
 
 # 项目特定的同步模式
 # 示例：数据处理项目通常从远程拉取结果

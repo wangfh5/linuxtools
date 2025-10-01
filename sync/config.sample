@@ -8,8 +8,19 @@
 # ============================================================================
 
 # 默认远程服务器（修改为你的服务器）
+# 方式1: 直接使用完整地址
 DEFAULT_REMOTE_HOST="phyxxy-wfh@sydata.hpc.sjtu.edu.cn"
 DEFAULT_REMOTE_BASE="/dssg/home/acct-phyxxy/phyxxy-wfh"
+DEFAULT_REMOTE_PORT="22"  # SSH 端口，默认 22
+
+# 方式2: 使用 ~/.ssh/config 中的 Host alias（推荐）
+# DEFAULT_REMOTE_HOST="scnet"  # 引用 SSH config 中的别名
+# DEFAULT_REMOTE_BASE="/dssg/home/acct-phyxxy/phyxxy-wfh"
+# 注意：使用 SSH alias 时，端口和密钥会自动从 ~/.ssh/config 读取，无需配置
+
+# SSH 密钥文件（可选）
+# 如果不使用 SSH alias，可以明确指定密钥文件
+# DEFAULT_SSH_IDENTITY_FILE="~/.ssh/acn16ba0cj_lasg02.hpccube.com_RsaKeyExpireTime_2025-11-25_11-22-10.txt"
 
 # 默认同步模式
 DEFAULT_MODE="push"

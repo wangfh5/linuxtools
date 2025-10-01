@@ -3,10 +3,13 @@
 # 通用目录同步工具
 # 支持本地与远程服务器之间的双向同步
 
-# 默认配置
-DEFAULT_REMOTE_HOST="phyxxy-wfh@sydata.hpc.sjtu.edu.cn"
-DEFAULT_REMOTE_BASE="/dssg/home/acct-phyxxy/phyxxy-wfh"
-DEFAULT_MODE="push"
+# 硬编码默认值（作为最后的 fallback）
+# 这些值会被配置文件覆盖
+FALLBACK_REMOTE_HOST="phyxxy-wfh@sydata.hpc.sjtu.edu.cn"
+FALLBACK_REMOTE_BASE="/dssg/home/acct-phyxxy/phyxxy-wfh"
+FALLBACK_REMOTE_PORT="22"
+FALLBACK_SSH_IDENTITY_FILE=""  # 默认不指定，让 SSH 自动选择
+FALLBACK_MODE="push"
 
 # 配置文件路径（优先级：项目配置 > 用户配置）
 CONFIG_FILES=(
@@ -30,6 +33,23 @@ load_config() {
         echo "加载项目配置: ./.sync_config"
         source "./.sync_config"
     fi
+    
+    # 3. 应用 fallback 值（如果配置文件中没有定义）
+    DEFAULT_MODE="${DEFAULT_MODE:-$FALLBACK_MODE}"
+    DEFAULT_REMOTE_HOST="${DEFAULT_REMOTE_HOST:-$FALLBACK_REMOTE_HOST}"
+    DEFAULT_REMOTE_BASE="${DEFAULT_REMOTE_BASE:-$FALLBACK_REMOTE_BASE}"
+    DEFAULT_REMOTE_PORT="${DEFAULT_REMOTE_PORT:-$FALLBACK_REMOTE_PORT}"
+    DEFAULT_SSH_IDENTITY_FILE="${DEFAULT_SSH_IDENTITY_FILE:-$FALLBACK_SSH_IDENTITY_FILE}"
+}
+
+# 初始化工作变量
+init_vars() {
+    # 基于配置值初始化工作变量
+    MODE="$DEFAULT_MODE"
+    REMOTE_HOST="$DEFAULT_REMOTE_HOST"
+    REMOTE_PORT="$DEFAULT_REMOTE_PORT"
+    SSH_IDENTITY_FILE="$DEFAULT_SSH_IDENTITY_FILE"
+    DRY_RUN=false
 }
 
 # 合并排除规则
@@ -82,11 +102,6 @@ merge_excludes() {
     EXCLUDES=("${merged_excludes[@]}")
 }
 
-# 全局变量
-MODE="$DEFAULT_MODE"
-REMOTE_HOST="$DEFAULT_REMOTE_HOST"
-DRY_RUN=false
-
 # 显示帮助信息
 show_help() {
     cat << EOF
@@ -95,13 +110,14 @@ show_help() {
 用法: $0 [选项]
 
 选项:
-    -m, --mode MODE        同步模式 (默认: push)
+    -m, --mode MODE        同步模式 (默认: 配置文件中的 DEFAULT_MODE)
                           push:      本地覆盖远程 (删除远程多余文件)
                           pull:      远程覆盖本地 (删除本地多余文件)
                           copy-push: 本地复制到远程 (不删除远程文件)
                           copy-pull: 远程复制到本地 (不删除本地文件)
     
-    -r, --remote HOST      远程服务器地址 (默认: $DEFAULT_REMOTE_HOST)
+    -r, --remote HOST      远程服务器地址 (默认: 配置文件中的 DEFAULT_REMOTE_HOST)
+    -p, --port PORT        SSH 端口 (默认: 配置文件中的 DEFAULT_REMOTE_PORT，通常是 22)
     -n, --dry-run          预览模式，不实际执行
     -h, --help             显示此帮助信息
 
@@ -123,6 +139,10 @@ parse_args() {
                 ;;
             -r|--remote)
                 REMOTE_HOST="$2"
+                shift 2
+                ;;
+            -p|--port)
+                REMOTE_PORT="$2"
                 shift 2
                 ;;
             -n|--dry-run)
@@ -220,6 +240,27 @@ perform_sync() {
         echo "--- 预览模式 ---"
     fi
     
+    # 配置 SSH 选项（端口和密钥）
+    SSH_CMD="ssh"
+    SSH_OPTS_CHANGED=false
+    
+    if [[ "$REMOTE_PORT" != "22" ]]; then
+        SSH_CMD="$SSH_CMD -p $REMOTE_PORT"
+        SSH_OPTS_CHANGED=true
+        echo "SSH 端口: $REMOTE_PORT"
+    fi
+    
+    if [[ -n "$SSH_IDENTITY_FILE" ]]; then
+        SSH_CMD="$SSH_CMD -i $SSH_IDENTITY_FILE"
+        SSH_OPTS_CHANGED=true
+        echo "SSH 密钥: $SSH_IDENTITY_FILE"
+    fi
+    
+    # 只有在需要自定义 SSH 选项时才传递 -e 参数
+    if [ "$SSH_OPTS_CHANGED" = true ]; then
+        RSYNC_OPTS+=(-e "$SSH_CMD")
+    fi
+    
     echo "本地路径: $LOCAL_PATH"
     echo "远程路径: $REMOTE_TARGET"
     echo "源: $SOURCE"
@@ -243,12 +284,13 @@ perform_sync() {
 
 # 主函数
 main() {
-    load_config
-    merge_excludes
-    parse_args "$@"
-    validate_mode
-    detect_paths
-    perform_sync
+    load_config      # 加载配置文件（用户配置 → 项目配置）
+    init_vars        # 基于配置初始化工作变量
+    merge_excludes   # 合并排除规则
+    parse_args "$@"  # 解析命令行参数（可覆盖配置）
+    validate_mode    # 验证同步模式
+    detect_paths     # 检测路径
+    perform_sync     # 执行同步
 }
 
 main "$@"
