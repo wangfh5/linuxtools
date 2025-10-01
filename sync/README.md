@@ -2,6 +2,36 @@
 
 支持双向同步的 rsync 封装脚本，简化本地和远程服务器之间的文件传输。
 
+## 设计理念
+
+**相对路径镜像同步** - 这是本工具的核心设计：
+
+- 工具会自动计算当前目录相对于 `$HOME` 的路径
+- 在远程服务器的对应位置进行同步
+- 本地和远程必须有相似的目录结构
+
+### 工作原理示例
+
+假设配置：
+- 本地 HOME: `/Users/username`
+- 远程 BASE: `/remote/home/username`
+
+在本地 `~/Projects/mycode` 目录执行 `sync-remote`：
+```
+本地路径: /Users/username/Projects/mycode
+相对路径: /Projects/mycode
+远程路径: /remote/home/username/Projects/mycode
+```
+
+**优势**：
+- 无需每次指定目录路径
+- 保持本地和远程目录结构一致
+- 适合在多个项目间频繁切换同步
+
+**限制**：
+- 当前目录必须在 `$HOME` 下
+- 需要远程有对应的目录结构
+
 ## 快速开始
 
 ```bash
@@ -32,10 +62,9 @@ sync-remote -h
 
 ## 配置文件
 
-工具支持多级配置，按优先级从高到低：
-1. 项目配置：`./.sync_config`（当前目录）
-2. 用户配置：`~/.sync_config`（用户主目录）
-3. 全局配置：`~/.config/sync_to_remote/config`
+工具支持两级配置，按优先级从高到低：
+1. 项目配置：`./.sync_config`（当前目录，项目特定配置）
+2. 用户配置：`~/.config/sync_to_remote/config`（遵循 XDG 标准）
 
 ### 配置示例
 

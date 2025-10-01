@@ -8,11 +8,10 @@ DEFAULT_REMOTE_HOST="phyxxy-wfh@sydata.hpc.sjtu.edu.cn"
 DEFAULT_REMOTE_BASE="/dssg/home/acct-phyxxy/phyxxy-wfh"
 DEFAULT_MODE="push"
 
-# 配置文件路径（优先级：当前目录 > 家目录 > 默认配置）
+# 配置文件路径（优先级：项目配置 > 用户配置）
 CONFIG_FILES=(
-    "./.sync_config"
-    "$HOME/.sync_config"
-    "$HOME/.config/sync_to_remote/config"
+    "./.sync_config" # 项目配置
+    "$HOME/.config/sync_to_remote/config" # 用户配置
 )
 
 # 加载配置文件
@@ -20,19 +19,13 @@ load_config() {
     # 按优先级从低到高加载所有存在的配置文件
     # 这样高优先级的配置可以覆盖低优先级的配置
     
-    # 1. 首先加载全局配置（如果存在）
+    # 1. 首先加载用户配置（如果存在），遵循 XDG 标准
     if [[ -f "$HOME/.config/sync_to_remote/config" ]]; then
-        echo "加载全局配置: $HOME/.config/sync_to_remote/config"
+        echo "加载用户配置: $HOME/.config/sync_to_remote/config"
         source "$HOME/.config/sync_to_remote/config"
     fi
     
-    # 2. 然后加载用户配置（如果存在）
-    if [[ -f "$HOME/.sync_config" ]]; then
-        echo "加载用户配置: $HOME/.sync_config"
-        source "$HOME/.sync_config"
-    fi
-    
-    # 3. 最后加载项目配置（如果存在），具有最高优先级
+    # 2. 然后加载项目配置（如果存在），具有最高优先级
     if [[ -f "./.sync_config" ]]; then
         echo "加载项目配置: ./.sync_config"
         source "./.sync_config"

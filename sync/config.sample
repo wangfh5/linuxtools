@@ -1,4 +1,5 @@
-# 全局同步配置文件
+# 用户默认配置文件
+# 应保存到: ~/.config/sync_to_remote/config
 # 这些设置会被项目特定的 .sync_config 文件覆盖
 
 # 默认远程服务器

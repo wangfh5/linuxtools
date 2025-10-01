@@ -7,6 +7,8 @@
 ### [sync-remote](./sync/)
 远程服务器文件同步工具，基于 rsync 的双向同步封装脚本。
 
+**核心特性**：相对路径镜像 - 自动同步到远程对应目录，无需指定路径参数。
+
 ```bash
 sync-remote              # 推送到远程
 sync-remote -m pull      # 从远程拉取
