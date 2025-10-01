@@ -37,28 +37,29 @@ merge_excludes() {
     local merged_excludes=()
     
     # 如果指定了排除规则类型，使用预定义的规则
-    if [[ -n "$EXCLUDE_TYPE" ]]; then
-        case "$EXCLUDE_TYPE" in
-            "fortran")
-                merged_excludes+=("${EXCLUDES_FORTRAN[@]}")
-                ;;
-            "python")
-                merged_excludes+=("${EXCLUDES_PYTHON[@]}")
-                ;;
-            "cpp")
-                merged_excludes+=("${EXCLUDES_CPP[@]}")
-                ;;
-        esac
-    fi
-    
-    # 添加通用排除规则
-    if [[ -n "${EXCLUDES_COMMON[@]}" ]]; then
-        merged_excludes+=("${EXCLUDES_COMMON[@]}")
+    # 支持数组形式，允许组合多个类型
+    if [[ -n "${EXCLUDE_TYPES[@]}" ]]; then
+        for type in "${EXCLUDE_TYPES[@]}"; do
+            case "$type" in
+                "fortran")
+                    merged_excludes+=("${EXCLUDES_FORTRAN[@]}")
+                    ;;
+                "python")
+                    merged_excludes+=("${EXCLUDES_PYTHON[@]}")
+                    ;;
+                "cpp")
+                    merged_excludes+=("${EXCLUDES_CPP[@]}")
+                    ;;
+                "common")
+                    merged_excludes+=("${EXCLUDES_COMMON[@]}")
+                    ;;
+            esac
+        done
     fi
     
     # 添加自定义排除规则
-    if [[ -n "${EXCLUDES[@]}" ]]; then
-        merged_excludes+=("${EXCLUDES[@]}")
+    if [[ -n "${EXCLUDE_CUSTOM[@]}" ]]; then
+        merged_excludes+=("${EXCLUDE_CUSTOM[@]}")
     fi
     
     # 如果没有任何规则，使用默认规则
@@ -77,6 +78,7 @@ merge_excludes() {
     for exclude in "${merged_excludes[@]}"; do
         echo "  $exclude"
     done
+    # 将合并后的规则赋值给 EXCLUDES，供 rsync 使用
     EXCLUDES=("${merged_excludes[@]}")
 }
 
@@ -184,7 +186,7 @@ perform_sync() {
     # 基本 rsync 参数
     RSYNC_OPTS=(--archive --partial --progress)
     
-    # EXCLUDES 数组已经在 merge_excludes() 函数中设置好了
+    # EXCLUDES 数组已经在 merge_excludes() 中合并好了（预定义 + 自定义）
     
     # 根据模式设置源和目标
     case "$MODE" in
