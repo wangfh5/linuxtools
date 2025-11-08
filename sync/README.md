@@ -140,7 +140,28 @@ DEFAULT_REMOTE_BASE="/dssg/home/acct-phyxxy/phyxxy-wfh"
 - `DEFAULT_SSH_IDENTITY_FILE`: SSH 密钥文件路径（可选，使用 alias 时自动读取）
 - `DEFAULT_MODE`: 默认同步模式（`push`/`pull`/`copy-push`/`copy-pull`）
 
-**排除规则配置：**
+**限定规则配置（INCLUDE_ONLY）：**
+- `INCLUDE_ONLY`: 数组，指定只同步哪些内容（最高优先级）
+  - 只在项目配置 (`.sync_config`) 中使用
+  - 设置后会**完全忽略**所有排除规则
+  - 支持通配符模式：`*`, `?`, `[...]`
+  - 示例场景：
+    ```bash
+    # 只同步特定前缀的目录
+    INCLUDE_ONLY=("proj_bt_honeycomb_exact_b=36.000*")
+    
+    # 只同步多个特定目录
+    INCLUDE_ONLY=(
+        "proj_bt_honeycomb_exact_b=36.000*"
+        "proj_bt_honeycomb_exact_b=42.000*"
+        "analysis_results/"
+    )
+    
+    # 只同步特定类型的文件
+    INCLUDE_ONLY=("*.dat" "*.txt" "results_*.csv")
+    ```
+
+**排除规则配置（EXCLUDE_*）：**
 - `EXCLUDES_*`: 预定义规则（在用户配置中定义，供 `EXCLUDE_TYPES` 使用）, 目前支持如下四项: 
   - `EXCLUDES_FORTRAN`: Fortran 项目规则（`*.o`, `*.mod`, `*.a`, `*.so`）
   - `EXCLUDES_PYTHON`: Python 项目规则（`__pycache__/`, `*.pyc`, `venv/`）
@@ -149,15 +170,18 @@ DEFAULT_REMOTE_BASE="/dssg/home/acct-phyxxy/phyxxy-wfh"
 - `EXCLUDE_TYPES`: 数组，指定要使用的预定义规则（可组合多个）
   - 可选值：`fortran`, `python`, `cpp`, `common`
   - 示例：`EXCLUDE_TYPES=("fortran" "common")`
-- `EXCLUDE_CUSTOM`: 自定义排除规则数组（在预定义规则基础上追加）
+- `EXCLUDE_CUSTOM`: 自定义排除规则数组（在已经指定使用的预定义规则基础上追加）
 
-**排除规则合并顺序：**
-1. 如果设置了 `EXCLUDE_TYPES`，按顺序加载对应的预定义规则
-2. 追加自定义的 `EXCLUDE_CUSTOM` 数组
-3. 如果都没有，使用脚本默认规则
+**规则优先级：**
+1. **如果设置了 `INCLUDE_ONLY`**：只同步匹配的内容，忽略所有 `EXCLUDE_*` 规则
+2. **否则使用排除规则**：
+   - 如果设置了 `EXCLUDE_TYPES`，按顺序加载对应的预定义规则
+   - 追加自定义的 `EXCLUDE_CUSTOM` 数组
+   - 如果两者都没有，使用脚本默认规则
 
 **优势：用户完全掌控**
-- 想要通用规则？添加 `"common"` 到 `EXCLUDE_TYPES`
-- 不想要通用规则？不添加即可
+- 想要通用规则？ 添加 `"common"` 到 `EXCLUDE_TYPES`, `EXCLUDE_TYPES=("common")`
+- 不想要通用规则？ 不添加即可
 - 需要同步 `.git/`？完全由你决定
+- 只想同步特定内容？使用 `INCLUDE_ONLY`
 

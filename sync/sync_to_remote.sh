@@ -54,6 +54,31 @@ init_vars() {
 
 # 合并排除规则
 merge_excludes() {
+    local merged_rules=()
+    
+    # 检查是否设置了限定规则（INCLUDE_ONLY）
+    # 限定规则优先级最高，会忽略所有排除规则
+    if [[ -n "${INCLUDE_ONLY[@]}" ]]; then
+        echo "使用限定规则 (INCLUDE_ONLY)，忽略所有排除规则"
+        echo "只同步以下匹配的内容:"
+        
+        for pattern in "${INCLUDE_ONLY[@]}"; do
+            echo "  include: $pattern"
+            # 包含匹配的目录/文件本身
+            merged_rules+=("--include=$pattern")
+            # 包含匹配目录内的所有内容（如果是目录）
+            merged_rules+=("--include=$pattern/**")
+        done
+        
+        # 排除所有其他内容
+        merged_rules+=("--exclude=*")
+        
+        # 将限定规则赋值给 EXCLUDES
+        EXCLUDES=("${merged_rules[@]}")
+        return
+    fi
+    
+    # 如果没有限定规则，使用原来的排除规则逻辑
     local merged_excludes=()
     
     # 如果指定了排除规则类型，使用预定义的规则
