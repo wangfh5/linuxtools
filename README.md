@@ -30,7 +30,12 @@ skill-mgr add <github-url> -a cursor # 添加并链接到 cursor
 
 ## 安装
 
-所有工具通过符号链接安装到 `~/bin/` 目录：
+```bash
+# 一键安装所有工具（会自动添加 ~/bin 到 PATH）
+./setup.sh
+```
+
+或手动安装到 `~/bin/` 目录：
 
 ```bash
 # 确保 ~/bin 在 PATH 中
