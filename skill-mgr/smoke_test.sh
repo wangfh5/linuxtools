@@ -21,7 +21,7 @@ TMP_PROJECT="$TMP_ROOT/project"
 
 mkdir -p "$TMP_HOME" "$TMP_WORK" "$TMP_PROJECT"
 mkdir -p "$TMP_HOME/agent-settings/skills"
-mkdir -p "$TMP_HOME/.cursor/skills" "$TMP_HOME/.codex/skills" "$TMP_HOME/.claude/skills"
+mkdir -p "$TMP_HOME/.cursor/skills" "$TMP_HOME/.codex/skills" "$TMP_HOME/.claude/skills" "$TMP_HOME/.gemini/skills"
 mkdir -p "$TMP_PROJECT/.claude/skills"
 
 SKILL_NAME="smoke-skill-$(date +%s)"
@@ -52,6 +52,12 @@ run help >/dev/null
 run add "$SKILL_DIR" -a cursor -g
 if [[ ! -L "$TMP_HOME/.cursor/skills/$SKILL_NAME" ]]; then
     echo "断言失败：全局 link 安装符号链接不存在" >&2
+    exit 1
+fi
+
+run add "$SKILL_NAME" -a gemini -g
+if [[ ! -L "$TMP_HOME/.gemini/skills/$SKILL_NAME" ]]; then
+    echo "断言失败：全局 gemini link 安装符号链接不存在" >&2
     exit 1
 fi
 
@@ -95,6 +101,7 @@ assert_contains "$list_out" "$SKILL_NAME"
 status_out="$(run status)"
 assert_contains "$status_out" "$SKILL_NAME -> cursor (copy)"
 assert_contains "$status_out" "$SKILL_NAME -> codex (copy)"
+assert_contains "$status_out" "$SKILL_NAME -> gemini"
 
 if [[ ! -L "$TMP_PROJECT/.claude/skills/$SKILL_NAME" ]]; then
     echo "断言失败：本地安装符号链接不存在" >&2

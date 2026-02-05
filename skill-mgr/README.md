@@ -50,7 +50,7 @@ skill-mgr 支持两种安装模式：
 
 #### 本地安装（默认）
 
-- 安装到项目目录的 agent 目录：`./.cursor/skills/`, `./.claude/skills/`, `./.codex/skills/`
+- 安装到项目目录的 agent 目录：`./.cursor/skills/`, `./.claude/skills/`, `./.codex/skills/`, `./.gemini/skills/`
 - 项目特定，与项目代码一起管理
 - 适合项目专用的 skills
 - 可以通过 `-p` 参数指定项目根目录
@@ -67,7 +67,7 @@ skill-mgr add ./my-skill -a cursor -p ~/projects/foo
 
 #### 全局安装（`-g` 参数）
 
-- 安装到家目录的 agent 目录：`~/.cursor/skills/`, `~/.claude/skills/`, `~/.codex/skills/`
+- 安装到家目录的 agent 目录：`~/.cursor/skills/`, `~/.claude/skills/`, `~/.codex/skills/`, `~/.gemini/skills/`
 - 系统范围可用，所有项目共享
 - 适合通用的、常用的 skills
 
@@ -77,7 +77,7 @@ skill-mgr add ./my-skill -a cursor -g
 # 创建 ~/.cursor/skills/my-skill
 ```
 
-**目录结构一致性**：无论全局还是本地，都使用相同的目录结构（`.cursor/skills/`），这样 agents 可以识别并加载 skills。
+**目录结构一致性**：无论全局还是本地，都使用相同的目录结构（`.cursor/skills/`, `.claude/skills/`, `.codex/skills/`, `.gemini/skills/`），这样 agents 可以识别并加载 skills。
 
 **注意**：`skills.yaml` 仅记录全局安装（`-g`）到各 agents 的状态，本地安装不会写入配置。
 
@@ -115,7 +115,7 @@ skill-mgr add <source> [-a <agents...>] [-g|-p <dir>] [-c]
 | 本地路径 | `/path/to/skill`, `./skill`, `../skill` | 从本地复制（必须以 `/`, `./`, `../` 开头） |
 | Skill 名称 | `skill-creator`, `creator` | 搜索中央目录（支持模糊匹配） |
 
-**agents 支持：** `cursor`, `claude-code`, `codex`
+**agents 支持：** `cursor`, `claude-code`, `codex`, `gemini`
 
 **安装模式参数：**
 
@@ -353,6 +353,7 @@ skills:
 | cursor | `~/.cursor/skills/` |
 | claude-code | `~/.claude/skills/` |
 | codex | `~/.codex/skills/` |
+| gemini | `~/.gemini/skills/` |
 
 符号链接示例:
 
@@ -368,6 +369,7 @@ skills:
 | cursor | `<project>/.cursor/skills/` |
 | claude-code | `<project>/.claude/skills/` |
 | codex | `<project>/.codex/skills/` |
+| gemini | `<project>/.gemini/skills/` |
 
 符号链接示例（假设项目在 `/Users/me/projects/foo`）:
 
@@ -376,7 +378,7 @@ skills:
 /Users/me/projects/foo/.claude/skills/skill-creator → ~/agent-settings/skills/skill-creator
 ```
 
-**目录结构一致性**：无论全局还是本地，都使用相同的目录结构（`.cursor/skills/`, `.claude/skills/`, `.codex/skills/`），这样 agents 可以识别并加载 skills。
+**目录结构一致性**：无论全局还是本地，都使用相同的目录结构（`.cursor/skills/`, `.claude/skills/`, `.codex/skills/`, `.gemini/skills/`），这样 agents 可以识别并加载 skills。
 
 ## 路径识别规则
 

@@ -90,7 +90,7 @@ normalize_base_dir() {
 
 # 获取 agent 目录的函数
 # 参数:
-#   $1 - agent 名称 (cursor, claude-code, codex)
+#   $1 - agent 名称 (cursor, claude-code, codex, gemini)
 #   $2 - base 目录 (可选，默认为 $HOME)
 get_agent_dir() {
     local agent="$1"
@@ -106,6 +106,9 @@ get_agent_dir() {
         codex)
             echo "$base_dir/.codex/skills"
             ;;
+        gemini)
+            echo "$base_dir/.gemini/skills"
+            ;;
         *)
             return 1
             ;;
@@ -114,7 +117,7 @@ get_agent_dir() {
 }
 
 # 支持的 agents 列表
-SUPPORTED_AGENTS="cursor claude-code codex"
+SUPPORTED_AGENTS="cursor claude-code codex gemini"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -133,6 +136,33 @@ print_warn() {
 
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# 通用 y/N 提示（需按回车确认；支持 y/yes, n/no；空输入走默认值）
+# 用法: if prompt_yes_no "是否继续? (y/N) " "N"; then ...; fi
+prompt_yes_no() {
+    local prompt="$1"
+    local default="${2:-N}"
+    local reply=""
+
+    while true; do
+        reply=""
+        read -r -p "$prompt" reply
+
+        # trim spaces
+        reply="${reply#"${reply%%[![:space:]]*}"}"
+        reply="${reply%"${reply##*[![:space:]]}"}"
+
+        if [[ -z "$reply" ]]; then
+            reply="$default"
+        fi
+
+        case "$reply" in
+            [Yy]|[Yy][Ee][Ss]) return 0 ;;
+            [Nn]|[Nn][Oo]) return 1 ;;
+            *) echo "请输入 y 或 n，然后按回车确认。" ;;
+        esac
+    done
 }
 
 # 本地时间戳（ISO 8601 + 时区偏移，如 2026-02-03T23:22:36+08:00）
@@ -407,17 +437,17 @@ add 命令参数:
                           (必须以 /, ./, ../ 开头，显式指定路径)
                         - Skill 名称: skill-creator (搜索中央目录)
 
-    -a <agents...>      指定要链接的 agents，支持: cursor, claude-code, codex
-                        可以指定多个，用空格分隔
-                        不指定则仅下载到中央目录
+	    -a <agents...>      指定要链接的 agents，支持: cursor, claude-code, codex, gemini
+	                        可以指定多个，用空格分隔
+	                        不指定则仅下载到中央目录
 
-    -g, --global        全局安装（安装到家目录）
-                        创建 ~/.cursor/skills/, ~/.claude/skills/, ~/.codex/skills/
+	    -g, --global        全局安装（安装到家目录）
+	                        创建 ~/.cursor/skills/, ~/.claude/skills/, ~/.codex/skills/, ~/.gemini/skills/
 
-    -p, --project <dir> 指定项目根目录（本地安装）
-                        默认为当前目录
-                        创建 <dir>/.cursor/skills/, <dir>/.claude/skills/, <dir>/.codex/skills/
-                        不能与 -g 同时使用
+	    -p, --project <dir> 指定项目根目录（本地安装）
+	                        默认为当前目录
+	                        创建 <dir>/.cursor/skills/, <dir>/.claude/skills/, <dir>/.codex/skills/, <dir>/.gemini/skills/
+	                        不能与 -g 同时使用
 
     -c, --copy          复制模式（复制整个目录而非创建符号链接）
                         适用于不支持符号链接的 agents
@@ -564,9 +594,7 @@ download_from_github() {
         # 检查目标是否已存在
         if [[ -e "$target_dir" ]]; then
             print_warn "Skill 已存在: $target_dir"
-            read -p "是否覆盖? (y/N) " -n 1 -r
-            echo
-            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            if ! prompt_yes_no "是否覆盖? (y/N) " "N"; then
                 print_info "取消操作"
                 exit 0
             fi
@@ -700,9 +728,7 @@ copy_from_local() {
     # 检查目标是否已存在
     if [[ -e "$target_dir" ]]; then
         print_warn "Skill 已存在: $target_dir"
-        read -p "是否覆盖? (y/N) " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        if ! prompt_yes_no "是否覆盖? (y/N) " "N"; then
             print_info "取消操作"
             return 0
         fi
@@ -758,9 +784,7 @@ create_symlinks() {
         # 检查 agent 目录是否存在
         if [[ ! -d "$agent_dir" ]]; then
             print_warn "Agent 目录不存在: $agent_dir"
-            read -p "是否创建目录? (y/N) " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
+            if prompt_yes_no "是否创建目录? (y/N) " "N"; then
                 /bin/mkdir -p "$agent_dir"
                 print_info "已创建目录: $agent_dir"
             else
@@ -787,9 +811,7 @@ create_symlinks() {
             fi
         elif [[ -e "$link_target" ]]; then
             print_warn "目标位置已存在非符号链接文件: $link_target"
-            read -p "是否删除并创建符号链接? (y/N) " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
+            if prompt_yes_no "是否删除并创建符号链接? (y/N) " "N"; then
                 if ! /bin/rm -rf "$link_target"; then
                     print_error "删除目标失败: $link_target"
                     _failed_agents+=("$agent")
@@ -851,9 +873,7 @@ copy_to_agents() {
         # 检查 agent 目录是否存在
         if [[ ! -d "$agent_dir" ]]; then
             print_warn "Agent 目录不存在: $agent_dir"
-            read -p "是否创建目录? (y/N) " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
+            if prompt_yes_no "是否创建目录? (y/N) " "N"; then
                 /bin/mkdir -p "$agent_dir"
                 print_info "已创建目录: $agent_dir"
             else
@@ -866,9 +886,7 @@ copy_to_agents() {
         # 如果目标已存在，先删除
         if [[ -e "$target_dir" ]]; then
             print_warn "目标位置已存在: $target_dir"
-            read -p "是否覆盖? (y/N) " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
+            if prompt_yes_no "是否覆盖? (y/N) " "N"; then
                 if ! /bin/rm -rf "$target_dir"; then
                     print_error "删除失败: $target_dir"
                     _failed_agents+=("$agent")
@@ -1632,9 +1650,7 @@ cmd_remove() {
         echo "  - 删除所有全局安装（link/copy）"
         echo "  - 从配置文件移除记录"
         echo
-        read -p "确认移除? (y/N) " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        if ! prompt_yes_no "确认移除? (y/N) " "N"; then
             print_info "取消操作"
             return 0
         fi
@@ -1722,9 +1738,7 @@ cmd_remove() {
             elif [[ -d "$target_path" ]]; then
                 # 复制的目录
                 print_warn "将删除目录: $target_path"
-                read -p "确认删除? (y/N) " -n 1 -r
-                echo
-                if [[ $REPLY =~ ^[Yy]$ ]]; then
+                if prompt_yes_no "确认删除? (y/N) " "N"; then
                     if /bin/rm -rf "$target_path"; then
                         print_info "  ✓ 已删除目录: $target_path"
                         actual_method="copy"
