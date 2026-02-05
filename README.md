@@ -21,6 +21,8 @@ AI Agent Skills 管理工具，支持从 GitHub 或本地路径添加 skills 到
 
 **核心特性**：统一管理 - 中央存储 + 符号链接，支持 cursor/claude-code/codex 多个 agents。
 
+**依赖**: 需要安装 `yq` (https://github.com/mikefarah/yq)
+
 ```bash
 skill-mgr add <github-url>           # 从 GitHub 添加 skill
 skill-mgr add <github-url> -a cursor # 添加并链接到 cursor
@@ -29,6 +31,20 @@ skill-mgr add <github-url> -a cursor # 添加并链接到 cursor
 详见 [skill-mgr/README.md](./skill-mgr/README.md)
 
 ## 安装
+
+### 前置依赖
+
+skill-mgr 需要 `yq` 工具：
+
+```bash
+# macOS
+brew install yq
+
+# Linux - 参见官方文档
+# https://github.com/mikefarah/yq#install
+```
+
+### 安装工具
 
 ```bash
 # 一键安装所有工具（会自动添加 ~/bin 到 PATH）
