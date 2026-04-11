@@ -10,34 +10,33 @@
 - ✅ 智能路径映射
 - ✅ rsync 参数自定义
 
-## 设计理念
+## 设计理念：异树同枝
 
-**相对路径镜像同步** - 这是本工具的核心设计：
+每台机器的 `$HOME` 是一棵目录树的根和树干。你在本地 `~/Projects/mycode` 工作，就像站在树的某一根枝上。sync-remote 在远程那棵树上找到**同一根枝**，让两端保持一致。
 
-- 工具会自动计算当前目录相对于 `$HOME` 的路径
-- 在远程服务器的对应位置进行同步
-- 本地和远程必须有相似的目录结构
+技术上说，工具用当前目录相对 `$HOME` 的路径（枝的走向），映射到远程服务器的对应位置（另一棵树上的同一根枝）。
 
 ### 工作原理示例
 
 假设配置：
-- 本地 HOME: `/Users/username`
-- 远程 BASE: `/remote/home/username`
+- 本地 HOME: `/Users/username` ← 本地树的根
+- 远程 BASE: `/remote/home/username` ← 远程树的根
 
 在本地 `~/Projects/mycode` 目录执行 `sync-remote`：
 ```
-本地路径: /Users/username/Projects/mycode
-相对路径: /Projects/mycode
-远程路径: /remote/home/username/Projects/mycode
+本地树:  /Users/username/Projects/mycode
+         ↑ 根             ↑ 枝的走向
+远程树:  /remote/home/username/Projects/mycode
+         ↑ 根                  ↑ 同一根枝
 ```
 
 **优势**：
-- 无需每次指定目录路径
+- 无需每次指定目录路径——cd 到哪里，就同步哪根枝
 - 保持本地和远程目录结构一致
 - 适合在多个项目间频繁切换同步
 
 **限制**：
-- 当前目录必须在 `$HOME` 下
+- 当前目录必须在 `$HOME` 下（枝必须长在树上）
 - 需要远程有对应的目录结构
 
 ## 快速开始
