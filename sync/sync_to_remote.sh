@@ -1,13 +1,16 @@
 #!/bin/bash
 
 # 通用目录同步工具 —— 异树同枝
-# 每台机器的 $HOME 是一棵目录树的根。本工具在不同的树上找到同一根枝
-# （当前目录相对 $HOME 的路径），通过 rsync 保持两端一致。
+# 每台机器的家目录下，都是一棵以 $HOME 为起点向下延伸的目录树。
+# 本工具将当前目录相对本地 $HOME 的"枝的走向"，映射到远端 $DEFAULT_REMOTE_BASE
+# 下的同名位置（另一棵树上的同一根枝），通过 rsync 双向同步该枝往后延伸的所有文件。
+# 默认 $DEFAULT_REMOTE_BASE="~" 使两端完全对称；也可配置为 ~/mywork 等，
+# 让本地 ~/Projects/xxx 映射到远端 ~/mywork/Projects/xxx（非对称映射）。
 
 # 硬编码默认值（作为最后的 fallback）
 # 这些值会被配置文件覆盖
-FALLBACK_REMOTE_HOST="phyxxy-wfh@sydata.hpc.sjtu.edu.cn"
-FALLBACK_REMOTE_BASE="/dssg/home/acct-phyxxy/phyxxy-wfh"
+FALLBACK_REMOTE_HOST=""   # 无默认值，必须由用户级或项目级配置提供
+FALLBACK_REMOTE_BASE="~"  # 默认远端“树干终点”为远端 $HOME（异树同枝）
 FALLBACK_REMOTE_PORT="22"
 FALLBACK_SSH_IDENTITY_FILE=""  # 默认不指定，让 SSH 自动选择
 FALLBACK_MODE="push"
@@ -214,6 +217,24 @@ detect_paths() {
     REMOTE_TARGET="$REMOTE_HOST:$DEFAULT_REMOTE_BASE$RELATIVE_PATH"
 }
 
+# 校验必需配置项（在 parse_args 之后执行，命令行 -r 也可满足校验）
+validate_config() {
+    if [[ -z "$REMOTE_HOST" ]]; then
+        echo "错误: 未配置远程服务器地址 (DEFAULT_REMOTE_HOST)"
+        echo ""
+        echo "请在以下任一配置文件中设置:"
+        echo "  - 用户级配置: $HOME/.config/sync_to_remote/config"
+        echo "  - 项目级配置: ./.sync_config"
+        echo ""
+        echo "或通过命令行参数指定: $0 -r user@host"
+        echo ""
+        echo "示例配置:"
+        echo '  DEFAULT_REMOTE_HOST="user@example.com"  # 或 SSH alias'
+        echo '  DEFAULT_REMOTE_BASE="~"                 # 默认即远端 $HOME'
+        exit 1
+    fi
+}
+
 # 验证同步模式
 validate_mode() {
     case "$MODE" in
@@ -314,6 +335,7 @@ main() {
     init_vars        # 基于配置初始化工作变量
     merge_excludes   # 合并排除规则
     parse_args "$@"  # 解析命令行参数（可覆盖配置）
+    validate_config  # 校验必需配置项（DEFAULT_REMOTE_HOST）
     validate_mode    # 验证同步模式
     detect_paths     # 检测路径
     perform_sync     # 执行同步

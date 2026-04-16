@@ -12,15 +12,17 @@
 
 ## 设计理念：异树同枝
 
-每台机器的 `$HOME` 是一棵目录树的根和树干。你在本地 `~/Projects/mycode` 工作，就像站在树的某一根枝上。sync-remote 在远程那棵树上找到**同一根枝**，让两端保持一致。
+![异树同枝](assets/sync-remote.png)
 
-技术上说，工具用当前目录相对 `$HOME` 的路径（枝的走向），映射到远程服务器的对应位置（另一棵树上的同一根枝）。
+每台机器的家目录下都是一棵目录树：本地的根是 `$HOME`，远端的根是 `$DEFAULT_REMOTE_BASE`（默认 `~`，即远端 `$HOME`）。你在本地 `~/Projects/mycode` 工作，就像站在树的某一根枝上。sync-remote 在远程那棵树上找到**同一根枝**，让两端保持一致。
 
-### 工作原理示例
+技术上说，工具取当前目录相对本地 `$HOME` 的路径（枝的走向），拼到远端 `$DEFAULT_REMOTE_BASE` 下的同名位置（另一棵树上的同一根枝）。
+
+### 工作原理示例（对称映射，默认）
 
 假设配置：
 - 本地 HOME: `/Users/username` ← 本地树的根
-- 远程 BASE: `/remote/home/username` ← 远程树的根
+- 远程 BASE: `~`（= 远端 `$HOME`，如 `/remote/home/username`）← 远程树的根
 
 在本地 `~/Projects/mycode` 目录执行 `sync-remote`：
 ```
@@ -30,14 +32,32 @@
          ↑ 根                  ↑ 同一根枝
 ```
 
+### 非对称映射（进阶）
+
+如果远端的项目不放在 `$HOME` 根下，而是放在某个子目录里，可以把 `DEFAULT_REMOTE_BASE` 指向那个子目录：
+
+```bash
+DEFAULT_REMOTE_BASE="~/mywork"
+```
+
+这样本地 `~/Projects/mycode` 会被同步到远端 `~/mywork/Projects/mycode`：
+
+```
+本地树:  /Users/username/Projects/mycode
+         ↑ $HOME          ↑ 枝的走向
+远程树:  /remote/home/username/mywork/Projects/mycode
+         ↑ $HOME               ↑ 同一根枝，但挂在 mywork 子树下
+         └────── BASE ─────────┘
+```
+
 **优势**：
 - 无需每次指定目录路径——cd 到哪里，就同步哪根枝
-- 保持本地和远程目录结构一致
+- 两端在各自 base 之下保持相同的相对结构
 - 适合在多个项目间频繁切换同步
 
 **限制**：
-- 当前目录必须在 `$HOME` 下（枝必须长在树上）
-- 需要远程有对应的目录结构
+- 当前目录必须在本地 `$HOME` 下（枝必须长在本地树上）
+- 远端 `$DEFAULT_REMOTE_BASE` 下需有对应的目录结构
 
 ## 快速开始
 
@@ -80,18 +100,18 @@ sync-remote -h
 
 **1. 编辑 `~/.ssh/config`：**
 ```ssh-config
-Host scnet
-    HostName lasg02.hpccube.com
-    Port 65032
-    User acn16ba0cj
-    IdentityFile ~/.ssh/acn16ba0cj_lasg02.hpccube.com_RsaKeyExpireTime_2025-11-25_11-22-10.txt
+Host myserver
+    HostName your-hpc.example.com
+    Port 22
+    User your_username
+    IdentityFile ~/.ssh/your_key_file
 ```
 
 **2. 在 sync-remote 配置中使用别名：**
 ```bash
 # ~/.config/sync_to_remote/config
-DEFAULT_REMOTE_HOST="scnet"  # 引用 SSH alias
-DEFAULT_REMOTE_BASE="/dssg/home/acct-phyxxy/phyxxy-wfh"
+DEFAULT_REMOTE_HOST="myserver"  # 引用 SSH alias
+DEFAULT_REMOTE_BASE="~"         # 默认即远端 $HOME；也可改为 ~/mywork 做非对称映射
 ```
 
 **优势：**
@@ -134,7 +154,7 @@ DEFAULT_REMOTE_BASE="/dssg/home/acct-phyxxy/phyxxy-wfh"
 - `DEFAULT_REMOTE_HOST`: 远程服务器地址
   - 方式1（推荐）：使用 `~/.ssh/config` 中的 Host alias（如 `scnet`）
   - 方式2：使用完整地址（如 `user@host.com`）
-- `DEFAULT_REMOTE_BASE`: 远程基础目录
+- `DEFAULT_REMOTE_BASE`: 远端树的根（树干终点），默认 `~`（= 远端 `$HOME`）；也可配置为 `~/mywork` 等子目录实现非对称映射
 - `DEFAULT_REMOTE_PORT`: SSH 端口（默认 `22`，仅在方式2下需要配置）
 - `DEFAULT_SSH_IDENTITY_FILE`: SSH 密钥文件路径（可选，使用 alias 时自动读取）
 - `DEFAULT_MODE`: 默认同步模式（`push`/`pull`/`copy-push`/`copy-pull`）
