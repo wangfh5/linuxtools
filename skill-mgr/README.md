@@ -12,6 +12,7 @@ AI Agent Skills 管理工具，支持从 GitHub 或本地路径添加 skills 到
 - **配置文件**: 使用 `skills.yaml` 记录全局安装到各 agents 的状态（link/copy）
 - **一致性检查**: 检测配置与实际符号链接的差异并自动修复
 - **双向同步**: 支持从全局符号链接/复制目录重建配置，或从配置部署全局链接
+- **Claude Code plugin/marketplace 同步**（仅 claude-code）：声明式记录到 `skills.yaml`，新电脑一键恢复
 
 ## 安装
 
@@ -41,6 +42,8 @@ brew install yq
 | `skill-mgr sync --from-agents` | 从现有 agents 安装状态（link/copy）重建配置文件 |
 | `skill-mgr sync --from-config` | 从配置文件创建符号链接（用于新电脑部署） |
 | `skill-mgr remove <skill> [-a <agents>] [-g\|-p <dir>]` | 移除 skill（完全移除或从指定位置移除） |
+
+Claude Code 的 plugin / marketplace 由官方 `claude plugin` CLI 管理；skill-mgr 只在 `sync` 里读写 `skills.yaml` 的 `claude_code` 段，不提供安装/卸载包装。详见下文。
 
 ## 使用方法
 
@@ -292,6 +295,63 @@ skill-mgr remove skill-creator -a cursor
 skill-mgr remove skill-creator -a cursor claude-code -g
 ```
 
+### Claude Code plugin / marketplace
+
+Claude Code 的 marketplace 仓库体量大（每个是一个 git repo），直接嵌进 `agent-settings` 不现实。skill-mgr 的做法是：**plugin/marketplace 本身用官方 `claude plugin` CLI 管理，skill-mgr 只负责把"装过哪些"声明式记录到 `skills.yaml`**，通过 `sync` 双向搬运。
+
+**前置要求：** 本机已安装 Claude Code（`claude` CLI 可用）。
+
+#### 日常使用（用官方 CLI）
+
+```bash
+# 装 marketplace 和 plugin 完全用官方命令
+claude plugin marketplace add openai/codex-plugin-cc
+claude plugin install codex@openai-codex
+
+# 改完后把当前状态写进 yaml
+skill-mgr sync --from-agents
+```
+
+`sync --from-agents` 在重建 skill 记录的同时，会读 `~/.claude/plugins/known_marketplaces.json` 和 `claude plugin list`，把 marketplace/plugin 信息合并写入 `skills.yaml` 的 `claude_code` 段。
+
+#### 新电脑恢复
+
+```bash
+# git clone agent-settings 到新机器后：
+skill-mgr sync --from-config
+```
+
+除了部署 skills 符号链接/复制目录外，若 yaml 里存在 `claude_code` 段，还会自动调用 `claude plugin marketplace add` + `claude plugin install` 重建所有声明过的 marketplace 和 plugin。已存在的条目会标 `[skip]` 跳过，幂等。
+
+未装 `claude` CLI 时会打印 warning 并跳过该步骤，不影响 skills 部署。
+
+> 注意：
+> - `claude plugin list` 文本输出里不带 scope，`sync --from-agents` 导入时 plugin 默认记为 `scope: user`，如有 `project`/`local` 场景请手工编辑 yaml。
+> - marketplace 名以 `known_marketplaces.json` 的实际 key 为准，与传入的 GitHub repo 名可能不同（例如 `openai/codex-plugin-cc` 导入后叫 `openai-codex`）。
+> - 合并模式：`sync --from-agents` 不会删除 yaml 里 claude 未启用的条目，如需清理请直接编辑 `skills.yaml`。
+
+#### yaml schema（v2）
+
+第一次写入 plugin/marketplace 记录时会把 `version` 升到 2，并新增 `claude_code:` 段：
+
+```yaml
+version: 2
+skills:
+  # ... 原有 skills 不变 ...
+claude_code:
+  marketplaces:
+    codex-plugin-cc:
+      source: openai/codex-plugin-cc     # 原样传给 `claude plugin marketplace add`
+      added_at: "2026-04-16T17:00:00+08:00"
+  plugins:
+    - name: openai-codex
+      marketplace: codex-plugin-cc
+      scope: user                         # user | project | local
+      added_at: "2026-04-16T17:01:00+08:00"
+```
+
+未涉及 plugin 的仓库保留 `version: 1` 和仅 `skills:` 段，完全向后兼容。
+
 ## 配置文件
 
 配置文件位于 `~/agent-settings/skills/skills.yaml`：
@@ -326,6 +386,8 @@ skills:
 - `agents_copy`: 全局 copy 安装的 agents 列表
 - `source`: skill 来源
 - `added_at`: 记录时间（本地时区）
+
+启用 plugin/marketplace 后会额外有 `claude_code:` 段，见上节。
 
 ## 目录结构
 
@@ -404,9 +466,14 @@ skills:
   - 官方仓库: https://github.com/mikefarah/yq
   - macOS 安装: `brew install yq`
   - Linux 安装: 参见 https://github.com/mikefarah/yq#install
+- `jq` (必需，用于 plugin/marketplace 子命令读取 Claude Code 的 JSON 状态)
+  - macOS 安装: `brew install jq`
+  - Linux 安装: `sudo apt-get install jq` 或 `sudo yum install jq`
+- `claude` CLI（仅 plugin/marketplace 子命令需要）
+  - 参见 https://docs.claude.com/en/docs/claude-code
 - 标准 Unix 工具: `cp`, `ln`, `mkdir`, `basename`
 
-**注意**: skill-mgr 启动时会自动检查 yq 是否已安装，如未安装会显示安装指引。
+**注意**: skill-mgr 启动时会自动检查 yq/jq 是否已安装，如未安装会显示安装指引。
 
 ## 常见问题
 
