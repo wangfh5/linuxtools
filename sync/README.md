@@ -85,6 +85,12 @@ sync-remote
 # 从远程拉取到本地
 sync-remote -m pull
 
+# 接力现场到远程（自动判断原位或 fork 新槽位）
+sync-remote -m handoff
+
+# handoff 强制原位（跳过安全检查，慎用）
+sync-remote -m handoff -f
+
 # 预览模式（dry-run）
 sync-remote -n
 
@@ -204,3 +210,96 @@ DEFAULT_REMOTE_BASE="~"         # 默认即远端 $HOME；也可改为 ~/mywork 
 - 需要同步 `.git/`？完全由你决定
 - 只想同步特定内容？使用 `INCLUDE_ONLY`
 
+## Handoff 模式：工作现场接力
+
+### 这是什么？
+
+Handoff 不是"更复杂的同步"，而是**有冲突感知的现场接力**：把本地工作树完整搬到远端，让远端立即成为可继续开发的环境。它解决的是"本地写到一半，想换台机器接着写"的痛点。
+
+### 核心行为
+
+1. **先检查，再同步**：SSH 到远端采集状态（dirty?、HEAD SHA、绝对路径），在本地判定是否可安全接力
+2. **可接力 → 原位同步**（含 `.git/`）
+3. **不可接力 → 自动 fork 新槽位**（如 `foo-handoff-20260417-1430`），并用 `--link-dest` 硬链接未变文件，不重传
+4. **默认按 `.gitignore` 排除**
+
+### 决策表
+
+| 远端状态 | 判定 | 动作 |
+|---------|------|------|
+| 目录不存在 | `absent` | ✅ 原位创建 |
+| HEAD 一致 / 远端是本地祖先 / 非 git 目录 | `safe` | ✅ 原位同步 |
+| 远端 tracked 文件有修改 | `dirty` | ⚠️ Fork 新槽位 |
+| 远端有本地不认识的 commit | `diverged` | ⚠️ Fork 新槽位 |
+
+"远端落后于本地/github"属于 `safe`——本地 `git merge-base --is-ancestor REMOTE_HEAD LOCAL_HEAD` 返回真，无覆盖风险。
+
+### 与其他模式的区别
+
+| 模式 | `--delete` | 默认排除 | 冲突处理 |
+|------|-----------|---------|---------|
+| `push` | ✅ 删除 | 用户配置 | 无 |
+| `copy-push` | ❌ | 用户配置 | 无 |
+| `handoff` | ❌ | **`.gitignore`** | **检测 + fork** |
+
+### 为什么默认同步 `.git/`
+
+接力的目标是"完整工作现场"——`.git/index`（staged changes）、branch refs、stash、reflog 都需要带过去，远端才能立即 `git status/diff/log/stash pop`。冲突风险已由前置检查 + fork 机制解决，不需要靠排除 `.git/` 来防御。
+
+### 为什么用 `.gitignore` 做默认排除
+
+项目的 `.gitignore` 已经把 `data/`、`outputs/`、`venv/`、`*.pkl` 等大文件排除在版本控制之外——handoff 直接复用这份清单即可，无需维护第二套排除规则。
+
+### 迭代接力（同一项目多次 handoff）
+
+典型场景：**本地写了一半带 staged changes → handoff 到远端 → 本地继续改 → 再次 handoff**。
+
+朴素实现里，第二次 handoff 会看到远端有"上次我们自己留下的" staged changes，误判为 dirty 并 fork 新槽位，失去原位迭代的价值。
+
+**解决方案：Marker 指纹自动识别**
+
+每次成功 handoff 后，sync-remote 会在远端目标目录写一个 `.sync_handoff_mark` 文件，记录远端当前 git 状态的 sha256 指纹（HEAD + `diff HEAD` + `diff --cached`）。下次 handoff 时：
+
+| 远端指纹对比 | 判定 | 动作 |
+|-------------|------|------|
+| 匹配 marker | 远端自上次 handoff 后未被改动 → 升级为 `safe` | ✅ 原位覆盖 |
+| 不匹配 marker（drift） | 远端被手动编辑过 | 走标准 dirty → fork |
+| 无 marker（首次 / 被删） | 走标准检查 | 按 status 决定 |
+
+**安全性**：若你 ssh 到远端手动改了代码（无论是 working tree 还是 commit），指纹必然变化，marker 自动失效，退回标准 dirty/diverged 判定。不会静默覆盖你在远端的工作。
+
+### `--force` 兜底
+
+如果你很清楚自己在做什么（例如确认远端的"dirty"状态就是要被覆盖的），可用 `-f` / `--force` 跳过所有安全检查：
+
+```bash
+sync-remote -m handoff --force   # 强制原位，跳过 marker/HEAD/dirty 所有检查
+```
+
+⚠️ **风险**：`--force` 会覆盖远端未提交的 tracked 改动和远端独有的 commit（对 `.git/` 目录的 rsync 会用本地 HEAD 覆盖远端 ref）。仅在你已手动确认过远端状态时使用。
+
+### 常用用法
+
+```bash
+# 接力到远端（自动判断原位或 fork）
+sync-remote -m handoff
+
+# 指定 fork 槽位的后缀（便于识别）
+sync-remote -m handoff --suffix mobile
+# → 若远端有冲突，fork 到 foo-handoff-mobile
+
+# 预览：看将同步什么，但不执行
+sync-remote -m handoff -n
+
+# 强制原位（跳过所有安全检查，慎用）
+sync-remote -m handoff -f
+
+# 在项目 .sync_config 里把 handoff 设为默认
+# DEFAULT_MODE="handoff"
+```
+
+### 已知局限
+
+- 若远端处于 rebase/merge 中途（`.git/MERGE_HEAD` 等存在），handoff 不会自动清理这些状态文件，可能导致远端 git 报"操作中断"。手动 `rm .git/MERGE_HEAD` 即可。
+- 若某个文件已被 git 追踪但同时匹配 `.gitignore`（罕见），会被 filter 排除。需要绕过时可在项目 `.sync_config` 中用 `INCLUDE_ONLY` 覆盖。
+- Marker 文件 `.sync_handoff_mark` 会留在远端目录。它不会被 rsync 从本地推上去（本地不存在此文件），也不会污染 git（如需，可加入 `.gitignore`）。
