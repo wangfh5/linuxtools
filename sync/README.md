@@ -88,6 +88,9 @@ sync-remote -m pull
 # 接力现场到远程（自动判断原位或 fork 新槽位）
 sync-remote -m handoff
 
+# 临时指定远程 SSH host，覆盖配置文件
+sync-remote -H myserver -m handoff
+
 # handoff 强制原位（跳过安全检查，慎用）
 sync-remote -m handoff -f
 
@@ -127,9 +130,10 @@ DEFAULT_REMOTE_BASE="~"         # 默认即远端 $HOME；也可改为 ~/mywork 
 
 ## 配置文件
 
-工具支持两级配置，按优先级从高到低：
-1. **项目配置**：`./.sync_config`（当前目录，项目特定配置）
-2. **用户配置**：`~/.config/sync_to_remote/config`（遵循 XDG 标准）
+工具支持两级配置；命令行参数优先于配置文件。整体优先级从高到低：
+1. **命令行参数**：例如 `-H myserver` 或 `--host myserver`
+2. **项目配置**：`./.sync_config`（当前目录，项目特定配置）
+3. **用户配置**：`~/.config/sync_to_remote/config`（遵循 XDG 标准）
 
 ### 两种配置的区别
 

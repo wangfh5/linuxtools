@@ -166,7 +166,8 @@ show_help() {
                           handoff:   接力现场到远程 (冲突感知；远端安全则原位，
                                      否则自动 fork 新槽位；默认按 .gitignore 排除)
 
-    -r, --remote HOST      远程服务器地址 (默认: 配置文件中的 DEFAULT_REMOTE_HOST)
+    -H, --host HOST        远程 SSH host，例如 myserver 或 user@host
+                          (默认: 配置文件中的 DEFAULT_REMOTE_HOST)
     -p, --port PORT        SSH 端口 (默认: 配置文件中的 DEFAULT_REMOTE_PORT，通常是 22)
     -n, --dry-run          预览模式，不实际执行
         --suffix SUFFIX    handoff 模式 fork 槽位时的后缀名（默认: 时间戳）
@@ -178,6 +179,7 @@ show_help() {
     $0 -m pull             # 远程覆盖本地
     $0 -m copy-push        # 本地复制到远程，不删除
     $0 -m handoff          # 接力现场到远程（自动判断原位或 fork）
+    $0 -H myserver -m handoff  # 临时指定远程 SSH host
     $0 -m handoff --suffix mobile  # fork 时用 "mobile" 作为槽位后缀
     $0 -n                  # 预览模式
 EOF
@@ -191,7 +193,7 @@ parse_args() {
                 MODE="$2"
                 shift 2
                 ;;
-            -r|--remote)
+            -H|--host)
                 REMOTE_HOST="$2"
                 shift 2
                 ;;
@@ -250,7 +252,7 @@ detect_paths() {
     REMOTE_TARGET="$REMOTE_HOST:$DEFAULT_REMOTE_BASE$RELATIVE_PATH"
 }
 
-# 校验必需配置项（在 parse_args 之后执行，命令行 -r 也可满足校验）
+# 校验必需配置项（在 parse_args 之后执行，命令行 -H/--host 也可满足校验）
 validate_config() {
     if [[ -z "$REMOTE_HOST" ]]; then
         echo "错误: 未配置远程服务器地址 (DEFAULT_REMOTE_HOST)"
@@ -259,7 +261,7 @@ validate_config() {
         echo "  - 用户级配置: $HOME/.config/sync_to_remote/config"
         echo "  - 项目级配置: ./.sync_config"
         echo ""
-        echo "或通过命令行参数指定: $0 -r user@host"
+        echo "或通过命令行参数指定: $0 -H user@host"
         echo ""
         echo "示例配置:"
         echo '  DEFAULT_REMOTE_HOST="user@example.com"  # 或 SSH alias'
