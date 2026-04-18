@@ -314,8 +314,14 @@ prepare_handoff() {
     # 3. SSH 到远端采集状态（只采集，不判定）
     build_ssh_cmd
     echo "检查远端状态: $REMOTE_HOST:$CANONICAL_REMOTE_PATH"
-    local REMOTE_STATUS
-    REMOTE_STATUS=$($SSH_CMD "$REMOTE_HOST" bash -s -- "$CANONICAL_REMOTE_PATH" <<'REMOTE_PROBE'
+
+    # 注意：不要写成 REMOTE_STATUS=$(ssh ... <<'EOF' ... EOF)。
+    # macOS 自带 bash 3.2 在 $() 命令替换里嵌套 here-doc 有 parser bug，
+    # 会把 heredoc 正文"漏"到外层解析，遇到 ;; 等 token 直接报语法错。
+    # 所以先用 read -r -d '' 把脚本收进变量（此时 heredoc 不在 $() 内），
+    # 再 pipe 给 ssh。bash 3.2 / 4 / 5 都能跑。
+    local PROBE_SCRIPT
+    IFS='' read -r -d '' PROBE_SCRIPT <<'REMOTE_PROBE' || true
 set -u
 TARGET="$1"
 # 安全地展开 leading tilde（避免 eval 带来的命令注入风险）
@@ -367,7 +373,10 @@ else
     echo "MARKER:none"
 fi
 REMOTE_PROBE
-    )
+
+    local REMOTE_STATUS
+    REMOTE_STATUS=$(printf '%s' "$PROBE_SCRIPT" | \
+        $SSH_CMD "$REMOTE_HOST" bash -s -- "$CANONICAL_REMOTE_PATH")
 
     if [[ -z "$REMOTE_STATUS" ]]; then
         echo "错误: 无法连接远端或采集状态失败"
