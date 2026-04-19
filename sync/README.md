@@ -306,7 +306,7 @@ sync-remote -m handoff -f
 
 - 若远端处于 rebase/merge 中途（`.git/MERGE_HEAD` 等存在），handoff 不会自动清理这些状态文件，可能导致远端 git 报"操作中断"。手动 `rm .git/MERGE_HEAD` 即可。
 - 若某个文件已被 git 追踪但同时匹配 `.gitignore`（罕见），会被 filter 排除。需要绕过时可在项目 `.sync_config` 中用 `INCLUDE_ONLY` 覆盖。
-- Marker 文件 `.sync_handoff_mark` 会留在远端目录。它不会被 rsync 从本地推上去（本地不存在此文件），也不会污染 git（如需，可加入 `.gitignore`）。
+- Marker 文件写在 `.git/.sync_handoff_mark`（远端）/ `.git/.sync_reclaim_mark`（本地）——放在 `.git/` 下是为了利用 git 永不跟踪 `.git/` 内容的特性，天然对 `git status` 隐形，无需维护 `.gitignore`。rsync 按文件名 `--exclude` 也会阻止 marker 在两端之间串台。非 git 目录，以及 submodule/worktree（`.git` 是文件而非目录）场景会兜底写到项目根，这种情况可手动 `.gitignore` 掉 marker 文件。
 
 ## Reclaim 模式：归队
 
@@ -329,8 +329,9 @@ handoff ↔ reclaim 构成一次完整的"出差/归队"生命周期。
 handoff 可能把工作 fork 到了 `foo-handoff-20260417-1430` 这样的远端槽位，
 canonical 路径就不准了。因此：
 
-- handoff 成功后会在**本地项目根**写一个 `.sync_reclaim_mark`，记录这次
-  handoff 实际落在的 `remote_host` 和 `remote_path`。
+- handoff 成功后会在**本地 `.git/`** 下写一个 `.sync_reclaim_mark`，记录这次
+  handoff 实际落在的 `remote_host` 和 `remote_path`。放在 `.git/` 下利用 git
+  不跟踪 `.git/` 内容的特性，`git status` 看不见。
 - reclaim 启动时读这个 marker——若 `remote_host` 和当前 `-H` 参数匹配，就用
   marker 里的路径作为源；否则（或 marker 不存在）退回 canonical 路径。
 

@@ -359,10 +359,16 @@ else
 fi
 echo "REMOTE_HEAD:$(git rev-parse HEAD 2>/dev/null || echo '')"
 echo "ABS_PATH:$ABS"
-# 读 marker 并对比远端当前指纹
+# 读 marker 并对比远端当前指纹（优先 .git/ 下的新位置，兼容旧位置）
 MARKER_FP=""
-if [[ -f ".sync_handoff_mark" ]]; then
-    MARKER_FP=$(grep '^fingerprint=' .sync_handoff_mark 2>/dev/null | head -n1 | cut -d= -f2)
+MARKER_FILE=""
+if [[ -f ".git/.sync_handoff_mark" ]]; then
+    MARKER_FILE=".git/.sync_handoff_mark"
+elif [[ -f ".sync_handoff_mark" ]]; then
+    MARKER_FILE=".sync_handoff_mark"
+fi
+if [[ -n "$MARKER_FILE" ]]; then
+    MARKER_FP=$(grep '^fingerprint=' "$MARKER_FILE" 2>/dev/null | head -n1 | cut -d= -f2)
 fi
 if [[ -n "$MARKER_FP" ]]; then
     CURRENT_FP=$({
@@ -607,6 +613,8 @@ VERIFY_FP
 
     local REMOTE_DIR="${REMOTE_TARGET#*:}"
     build_ssh_cmd
+    # Marker 写入 .git/ 下，让 git 自动忽略（`.git/` 内部 git 从不跟踪）
+    # 同时清理旧位置（项目根）的 marker，一次性迁移
     $SSH_CMD "$REMOTE_HOST" bash -s -- "$REMOTE_DIR" "$FP" "$TS" "$LOCAL_HOST_NAME" "$LOCAL_ABS" <<'WRITE_MARKER' || echo "警告: 远端 marker 写入失败（不影响本次同步）"
 set -u
 TARGET="$1"
@@ -614,16 +622,34 @@ case "$TARGET" in
     "~")   TARGET="$HOME" ;;
     "~/"*) TARGET="$HOME/${TARGET#~/}" ;;
 esac
-cat > "$TARGET/.sync_handoff_mark" <<EOF
+if [[ -d "$TARGET/.git" ]]; then
+    cat > "$TARGET/.git/.sync_handoff_mark" <<EOF
 fingerprint=$2
 timestamp=$3
 local_host=$4
 local_path=$5
 EOF
+    rm -f "$TARGET/.sync_handoff_mark"   # 迁移：删除旧位置
+else
+    # 非 git 目录（handoff 兜底），仍写项目根
+    cat > "$TARGET/.sync_handoff_mark" <<EOF
+fingerprint=$2
+timestamp=$3
+local_host=$4
+local_path=$5
+EOF
+fi
 WRITE_MARKER
 
     # 本地 reclaim marker：下次 reclaim 据此回程到正确的远端路径
-    cat > "$LOCAL_PATH/.sync_reclaim_mark" <<LOCAL_MARKER || echo "警告: 本地 reclaim marker 写入失败（不影响本次同步）"
+    local LOCAL_MARKER_DIR
+    if [[ -d "$LOCAL_PATH/.git" ]]; then
+        LOCAL_MARKER_DIR="$LOCAL_PATH/.git"
+        rm -f "$LOCAL_PATH/.sync_reclaim_mark"   # 迁移：删除旧位置
+    else
+        LOCAL_MARKER_DIR="$LOCAL_PATH"
+    fi
+    cat > "$LOCAL_MARKER_DIR/.sync_reclaim_mark" <<LOCAL_MARKER || echo "警告: 本地 reclaim marker 写入失败（不影响本次同步）"
 remote_host=$REMOTE_HOST
 remote_path=$REMOTE_DIR
 timestamp=$TS
@@ -643,8 +669,14 @@ prepare_reclaim() {
     local REASON="使用 canonical 路径（未找到 reclaim marker）"
 
     # 1. 读本地 marker（仅在 host 匹配时采纳其路径）
-    local LOCAL_MARK="$LOCAL_PATH/.sync_reclaim_mark"
-    if [[ -f "$LOCAL_MARK" ]]; then
+    #    优先 .git/ 下的新位置，兼容旧位置
+    local LOCAL_MARK=""
+    if [[ -f "$LOCAL_PATH/.git/.sync_reclaim_mark" ]]; then
+        LOCAL_MARK="$LOCAL_PATH/.git/.sync_reclaim_mark"
+    elif [[ -f "$LOCAL_PATH/.sync_reclaim_mark" ]]; then
+        LOCAL_MARK="$LOCAL_PATH/.sync_reclaim_mark"
+    fi
+    if [[ -n "$LOCAL_MARK" ]]; then
         local MARK_HOST MARK_PATH
         MARK_HOST=$(grep '^remote_host=' "$LOCAL_MARK" 2>/dev/null | head -n1 | cut -d= -f2-)
         MARK_PATH=$(grep '^remote_path=' "$LOCAL_MARK" 2>/dev/null | head -n1 | cut -d= -f2-)
@@ -680,9 +712,13 @@ ABS=$(cd "$TARGET" 2>/dev/null && pwd)
 echo "EXISTS:true"
 echo "ABS_PATH:$ABS"
 MFP=""
-if [[ -f "$TARGET/.sync_handoff_mark" ]]; then
-    MFP=$(grep '^fingerprint=' "$TARGET/.sync_handoff_mark" 2>/dev/null | head -n1 | cut -d= -f2-)
-fi
+# 优先 .git/ 下的新位置，兼容旧位置
+for cand in "$TARGET/.git/.sync_handoff_mark" "$TARGET/.sync_handoff_mark"; do
+    if [[ -f "$cand" ]]; then
+        MFP=$(grep '^fingerprint=' "$cand" 2>/dev/null | head -n1 | cut -d= -f2-)
+        break
+    fi
+done
 echo "MARKER_FP:$MFP"
 RECLAIM_PROBE
 
