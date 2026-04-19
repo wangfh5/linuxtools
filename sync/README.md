@@ -307,3 +307,82 @@ sync-remote -m handoff -f
 - 若远端处于 rebase/merge 中途（`.git/MERGE_HEAD` 等存在），handoff 不会自动清理这些状态文件，可能导致远端 git 报"操作中断"。手动 `rm .git/MERGE_HEAD` 即可。
 - 若某个文件已被 git 追踪但同时匹配 `.gitignore`（罕见），会被 filter 排除。需要绕过时可在项目 `.sync_config` 中用 `INCLUDE_ONLY` 覆盖。
 - Marker 文件 `.sync_handoff_mark` 会留在远端目录。它不会被 rsync 从本地推上去（本地不存在此文件），也不会污染 git（如需，可加入 `.gitignore`）。
+
+## Reclaim 模式：归队
+
+### 这是什么？
+
+Reclaim 是 handoff 的反向操作：**结束远端工作，把现场从远端拉回本地**。
+handoff ↔ reclaim 构成一次完整的"出差/归队"生命周期。
+
+### 核心契约
+
+- **本地安全校验（与 handoff 远端校验对称）**：reclaim 启动时会计算当前本地
+  git FP，和远端 `.sync_handoff_mark` 里记录的"handoff 时本地 FP"比对：
+  - 匹配 → 本地自 handoff 以来未被改动，放心覆盖
+  - 不匹配 / 无 marker / 非 git 仓库 → **拒绝执行**并给出对比信息，除非 `-f` 兜底
+- **不带 `--delete`**：本地独有的文件会保留；如需严格镜像，手动清理。
+- 没有本地 fork 槽位——校验不通过直接终止，由用户决定如何处理本地改动。
+
+### 关键问题：去哪儿拉？
+
+handoff 可能把工作 fork 到了 `foo-handoff-20260417-1430` 这样的远端槽位，
+canonical 路径就不准了。因此：
+
+- handoff 成功后会在**本地项目根**写一个 `.sync_reclaim_mark`，记录这次
+  handoff 实际落在的 `remote_host` 和 `remote_path`。
+- reclaim 启动时读这个 marker——若 `remote_host` 和当前 `-H` 参数匹配，就用
+  marker 里的路径作为源；否则（或 marker 不存在）退回 canonical 路径。
+
+### Pairing 生命周期
+
+Marker 代表"最近一次两端对齐的同步点"，每次 handoff / reclaim 成功后都会**刷新**
+（而不是清除）为新的 FP 和路径，这样下一次 handoff/reclaim 才能识别出两端已对齐。
+
+| 动作 | 远端 `.sync_handoff_mark` | 本地 `.sync_reclaim_mark` |
+|------|---------------------------|---------------------------|
+| handoff 成功 | 写入（FP = 本次 handoff 的本地 FP） | 写入（远端路径 = 本次实际目标路径） |
+| reclaim 成功 | 刷新（FP = 刚对齐后的本地/远端 FP）| 刷新（路径 = 本次源路径） |
+
+**为什么不在 reclaim 后清除**：如果清除，下次 handoff 探测远端时会看到远端
+working tree 仍带有 reclaim 前的 dirty 状态（reclaim 只是把这些改动也同步到
+了本地，远端并没有"被清理"），但 marker 没了没法 override，就会被判为
+dirty → fork 到新槽位，形成误 fork 回归。
+
+### 用法
+
+```bash
+# 归队：从远端拉回本地（含本地安全校验）
+sync-remote -m reclaim
+
+# 指定远端（与 handoff 时的 -H 保持一致）
+sync-remote -m reclaim -H myserver
+
+# 预览
+sync-remote -m reclaim -n
+
+# 已知本地有"无关紧要"的变动但确认要覆盖：跳过校验
+sync-remote -m reclaim -f
+```
+
+### 校验失败时怎么办
+
+reclaim 报"本地 git 状态已偏离 handoff 时的状态"时，说明本地的 tracked 文件
+或 HEAD 发生过变化。常见处理：
+
+- 忘了在本地干了什么？`git status` / `git diff` / `git log` 看一眼
+- 本地改动值得保留：`git stash` 或 `git commit` 到分支后再 reclaim
+- 本地改动是一次失败的尝试，确认丢弃：`git checkout -- .` 后再 reclaim
+- 明知无碍，想直接覆盖：加 `-f`
+
+### 已知局限
+
+- 若 marker 记录的 fork 槽位在远端被删除，reclaim 会报"远端路径不存在"。
+  手动用 `-H` 指向仍存在的位置，或清除 `.sync_reclaim_mark` 后退回 canonical 路径。
+- reclaim 不会从本地删掉任何文件（无 `--delete`）。若远端**删除/重命名**了
+  tracked 文件，本地的旧文件不会被清理——reclaim 结束时会检测这种情况并
+  给出 loud 警告、跳过 marker 刷新，下次 handoff 会按标准 dirty/diverged 判定
+  （可能 fork 到新槽位，fail-safe）。
+  - 恢复路径：按警告提示手动 `rm` 掉本地残留 → `sync-remote -m reclaim -f`
+    （因为清理后本地 FP 已偏离 marker，需要 `-f` 跳过本地校验）。
+- 非 git 仓库无法做本地校验；这种场景下只能用 `-f` 强制 reclaim。

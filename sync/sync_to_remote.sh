@@ -57,6 +57,7 @@ init_vars() {
     HANDOFF_SLOT_SUFFIX=""
     HANDOFF_EXTRA_OPTS=()
     HANDOFF_FORCE=false
+    HANDOFF_START_FP=""
 }
 
 # 计算本地 git 状态指纹（供 handoff marker 使用）
@@ -165,13 +166,16 @@ show_help() {
                           copy-pull: 远程复制到本地 (不删除本地文件)
                           handoff:   接力现场到远程 (冲突感知；远端安全则原位，
                                      否则自动 fork 新槽位；默认按 .gitignore 排除)
+                          reclaim:   归队：从远端把 handoff 出去的现场拉回本地
+                                     (按 marker 找回 fork 槽位；校验本地自 handoff
+                                     起未被改动，否则拒绝覆盖)
 
     -H, --host HOST        远程 SSH host，例如 myserver 或 user@host
                           (默认: 配置文件中的 DEFAULT_REMOTE_HOST)
     -p, --port PORT        SSH 端口 (默认: 配置文件中的 DEFAULT_REMOTE_PORT，通常是 22)
     -n, --dry-run          预览模式，不实际执行
         --suffix SUFFIX    handoff 模式 fork 槽位时的后缀名（默认: 时间戳）
-    -f, --force            handoff 模式跳过所有安全检查，强制原位覆盖（慎用）
+    -f, --force            handoff/reclaim 模式跳过所有安全检查，强制覆盖（慎用）
     -h, --help             显示此帮助信息
 
 示例:
@@ -179,6 +183,7 @@ show_help() {
     $0 -m pull             # 远程覆盖本地
     $0 -m copy-push        # 本地复制到远程，不删除
     $0 -m handoff          # 接力现场到远程（自动判断原位或 fork）
+    $0 -m reclaim          # 从远端归队（自动找 fork 槽位，刷新 pairing marker）
     $0 -H myserver -m handoff  # 临时指定远程 SSH host
     $0 -m handoff --suffix mobile  # fork 时用 "mobile" 作为槽位后缀
     $0 -n                  # 预览模式
@@ -273,11 +278,11 @@ validate_config() {
 # 验证同步模式
 validate_mode() {
     case "$MODE" in
-        push|pull|copy-push|copy-pull|handoff)
+        push|pull|copy-push|copy-pull|handoff|reclaim)
             ;;
         *)
             echo "错误: 无效的同步模式 '$MODE'"
-            echo "支持的模式: push, pull, copy-push, copy-pull, handoff"
+            echo "支持的模式: push, pull, copy-push, copy-pull, handoff, reclaim"
             exit 1
             ;;
     esac
@@ -302,11 +307,13 @@ build_ssh_cmd() {
 prepare_handoff() {
     echo "=== Handoff 接力模式 ==="
 
-    # 1. 采集本地 git 状态
+    # 1. 采集本地 git 状态；FP 在 rsync 前定格，避免"rsync 期间本地被编辑，marker 捕获的 FP
+    #    与真正发出去的 payload 不符"——marker 是 reclaim 安全校验的锚点，必须对应实际 rsync 内容
     local LOCAL_HEAD=""
     if git rev-parse --is-inside-work-tree &>/dev/null; then
         LOCAL_HEAD="$(git rev-parse HEAD 2>/dev/null || true)"
     fi
+    HANDOFF_START_FP="$(git_fingerprint)"
 
     # 2. 解析远端 canonical 路径（tilde 在远端 shell 展开）
     local CANONICAL_REMOTE_PATH="$DEFAULT_REMOTE_BASE$RELATIVE_PATH"
@@ -502,7 +509,13 @@ REMOTE_PROBE
     done
     EXCLUDES=("${filtered[@]}")
 
-    # 7. 注入 handoff 默认规则（除非用户用了 INCLUDE_ONLY）
+    # 7. 始终排除 pairing marker（放在 .gitignore filter 前面，rsync first-match 语义下必定先中）
+    HANDOFF_EXTRA_OPTS+=(
+        "--exclude=.sync_reclaim_mark"
+        "--exclude=.sync_handoff_mark"
+    )
+
+    # 8. 注入 handoff 默认规则（除非用户用了 INCLUDE_ONLY）
     if [[ -z "${INCLUDE_ONLY[*]:-}" ]]; then
         HANDOFF_EXTRA_OPTS+=(
             "--filter=:- .gitignore"
@@ -510,7 +523,7 @@ REMOTE_PROBE
         )
     fi
 
-    # 8. 输出决策摘要
+    # 9. 输出决策摘要
     echo "判定结果: $STATUS"
     echo "原因: $REASON"
     echo "目标: $REMOTE_TARGET"
@@ -522,13 +535,69 @@ REMOTE_PROBE
     echo
 }
 
-# 写入 handoff marker（在远端目标目录写 .sync_handoff_mark）
-# 目的：记录本次 handoff 后远端的 git 状态指纹，供下次 handoff 判定"远端是否自上次后未被改动"
+# 写入配对 marker（handoff 和 reclaim 共用，代表"这一刻两端同步到了同一 FP"）：
+#   - 远端 $REMOTE_DIR/.sync_handoff_mark：记录 FP，供下次 handoff/reclaim 判定对齐
+#   - 本地 $LOCAL_PATH/.sync_reclaim_mark：记录远端路径绑定，供下次 reclaim 路由
+#     （handoff 可能 fork 到新槽位，canonical 路径不够用）
+# 参数 $1: mode 标签，写入 local marker 的 mode= 字段；默认 "handoff"
 write_handoff_marker() {
-    local FP
-    FP=$(git_fingerprint)
+    local MODE_LABEL="${1:-handoff}"
+    # handoff 路径：用 prepare_handoff 在 rsync 前定格的 FP，避免 rsync 期间本地被改
+    # reclaim 路径：HANDOFF_START_FP 为空，回退到即时计算——此刻本地刚被 rsync 覆盖，
+    #              FP 等于远端刚发过来的 FP，正是"新的同步点"
+    local FP="${HANDOFF_START_FP:-}"
+    if [[ -z "$FP" ]]; then
+        FP=$(git_fingerprint)
+    fi
     if [[ -z "$FP" ]]; then
         return 0  # 非 git 仓库，跳过
+    fi
+
+    # reclaim 特检：rsync 不带 --delete。若远端删除/重命名了 tracked 文件，
+    # 本地旧文件仍在 → 本地 FP 与远端 FP 不符，marker 写下去会误导下次 handoff。
+    # 对策：重新 SSH 探一次远端 FP 做 sanity check；不一致则 loud 警告并跳过 marker 刷新，
+    # 下次 handoff 走标准（dirty/diverged）判定，fail-safe。
+    if [[ "$MODE_LABEL" == "reclaim" ]]; then
+        local REMOTE_DIR_VERIFY="${REMOTE_TARGET#*:}"
+        build_ssh_cmd
+        local VERIFY_SCRIPT REMOTE_FP=""
+        IFS='' read -r -d '' VERIFY_SCRIPT <<'VERIFY_FP' || true
+set -u
+TARGET="$1"
+case "$TARGET" in
+    "~")   TARGET="$HOME" ;;
+    "~/"*) TARGET="$HOME/${TARGET#~/}" ;;
+esac
+cd "$TARGET" 2>/dev/null || { echo "REMOTE_FP:"; exit 0; }
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "REMOTE_FP:"
+    exit 0
+fi
+RFP=$({
+    git rev-parse HEAD 2>/dev/null || echo "NO-HEAD"
+    git diff HEAD 2>/dev/null
+    echo "---CACHED---"
+    git diff --cached 2>/dev/null
+} | sha256sum | awk '{print $1}')
+echo "REMOTE_FP:$RFP"
+VERIFY_FP
+        local VRES
+        VRES=$(printf '%s' "$VERIFY_SCRIPT" | \
+            $SSH_CMD "$REMOTE_HOST" bash -s -- "$REMOTE_DIR_VERIFY" 2>/dev/null)
+        while IFS= read -r line; do
+            case "$line" in
+                REMOTE_FP:*) REMOTE_FP="${line#REMOTE_FP:}" ;;
+            esac
+        done <<< "$VRES"
+        if [[ -n "$REMOTE_FP" && "$REMOTE_FP" != "$FP" ]]; then
+            echo "警告: reclaim 后本地 FP 与远端不一致，跳过 marker 刷新"
+            echo "       本地 FP: $FP"
+            echo "       远端 FP: $REMOTE_FP"
+            echo "       可能原因: 远端删除/重命名了 tracked 文件，但 rsync 无 --delete 未同步到本地"
+            echo "       建议: git status 确认本地残留；或手动 rm 这些文件；然后重跑 reclaim"
+            echo "       下次 handoff 会走标准 dirty/diverged 判定（可能 fork 新槽位，fail-safe）"
+            return 0
+        fi
     fi
 
     local TS LOCAL_HOST_NAME LOCAL_ABS
@@ -538,7 +607,7 @@ write_handoff_marker() {
 
     local REMOTE_DIR="${REMOTE_TARGET#*:}"
     build_ssh_cmd
-    $SSH_CMD "$REMOTE_HOST" bash -s -- "$REMOTE_DIR" "$FP" "$TS" "$LOCAL_HOST_NAME" "$LOCAL_ABS" <<'WRITE_MARKER' || echo "警告: marker 写入失败（不影响本次 handoff）"
+    $SSH_CMD "$REMOTE_HOST" bash -s -- "$REMOTE_DIR" "$FP" "$TS" "$LOCAL_HOST_NAME" "$LOCAL_ABS" <<'WRITE_MARKER' || echo "警告: 远端 marker 写入失败（不影响本次同步）"
 set -u
 TARGET="$1"
 case "$TARGET" in
@@ -552,6 +621,164 @@ local_host=$4
 local_path=$5
 EOF
 WRITE_MARKER
+
+    # 本地 reclaim marker：下次 reclaim 据此回程到正确的远端路径
+    cat > "$LOCAL_PATH/.sync_reclaim_mark" <<LOCAL_MARKER || echo "警告: 本地 reclaim marker 写入失败（不影响本次同步）"
+remote_host=$REMOTE_HOST
+remote_path=$REMOTE_DIR
+timestamp=$TS
+mode=$MODE_LABEL
+LOCAL_MARKER
+}
+
+# Reclaim 归队：把 handoff 出去的现场拉回本地
+# 契约（用户声明）：reclaim 仅在本地无进行中工作时调用，故无本地冲突检查、无 fork。
+# 唯一实际问题：handoff 若 fork 到槽位，canonical 路径不够用 —— 靠
+# $LOCAL_PATH/.sync_reclaim_mark 记录的绑定路径回程。
+prepare_reclaim() {
+    echo "=== Reclaim 归队模式 ==="
+
+    local CANONICAL_REMOTE_PATH="$DEFAULT_REMOTE_BASE$RELATIVE_PATH"
+    local RECLAIM_SOURCE_PATH="$CANONICAL_REMOTE_PATH"
+    local REASON="使用 canonical 路径（未找到 reclaim marker）"
+
+    # 1. 读本地 marker（仅在 host 匹配时采纳其路径）
+    local LOCAL_MARK="$LOCAL_PATH/.sync_reclaim_mark"
+    if [[ -f "$LOCAL_MARK" ]]; then
+        local MARK_HOST MARK_PATH
+        MARK_HOST=$(grep '^remote_host=' "$LOCAL_MARK" 2>/dev/null | head -n1 | cut -d= -f2-)
+        MARK_PATH=$(grep '^remote_path=' "$LOCAL_MARK" 2>/dev/null | head -n1 | cut -d= -f2-)
+        if [[ -n "$MARK_HOST" && -n "$MARK_PATH" ]]; then
+            if [[ "$MARK_HOST" == "$REMOTE_HOST" ]]; then
+                RECLAIM_SOURCE_PATH="$MARK_PATH"
+                REASON="从 .sync_reclaim_mark 读取到绑定路径"
+            else
+                REASON="marker 的 host=$MARK_HOST 与当前 -H $REMOTE_HOST 不匹配，改用 canonical 路径"
+            fi
+        fi
+    fi
+
+    # 2. SSH 探测：路径存在性 + 读取远端 marker 的 fingerprint（= handoff 时的本地 FP）
+    #    使用 read -d '' 变量 + 管道，绕开 bash 3.2 在 $() 内嵌 heredoc 的 parser bug
+    build_ssh_cmd
+    echo "检查远端路径: $REMOTE_HOST:$RECLAIM_SOURCE_PATH"
+    local PROBE_SCRIPT
+    IFS='' read -r -d '' PROBE_SCRIPT <<'RECLAIM_PROBE' || true
+set -u
+TARGET="$1"
+case "$TARGET" in
+    "~")   TARGET="$HOME" ;;
+    "~/"*) TARGET="$HOME/${TARGET#~/}" ;;
+esac
+if [[ ! -d "$TARGET" ]]; then
+    echo "EXISTS:false"
+    echo "ABS_PATH:$TARGET"
+    echo "MARKER_FP:"
+    exit 0
+fi
+ABS=$(cd "$TARGET" 2>/dev/null && pwd)
+echo "EXISTS:true"
+echo "ABS_PATH:$ABS"
+MFP=""
+if [[ -f "$TARGET/.sync_handoff_mark" ]]; then
+    MFP=$(grep '^fingerprint=' "$TARGET/.sync_handoff_mark" 2>/dev/null | head -n1 | cut -d= -f2-)
+fi
+echo "MARKER_FP:$MFP"
+RECLAIM_PROBE
+
+    local PROBE_RESULT
+    PROBE_RESULT=$(printf '%s' "$PROBE_SCRIPT" | \
+        $SSH_CMD "$REMOTE_HOST" bash -s -- "$RECLAIM_SOURCE_PATH")
+
+    if [[ -z "$PROBE_RESULT" ]]; then
+        echo "错误: 无法连接远端或采集状态失败"
+        exit 1
+    fi
+
+    local REMOTE_EXISTS="" REMOTE_ABS="" REMOTE_MARKER_FP=""
+    while IFS= read -r line; do
+        case "$line" in
+            EXISTS:*)    REMOTE_EXISTS="${line#EXISTS:}" ;;
+            ABS_PATH:*)  REMOTE_ABS="${line#ABS_PATH:}" ;;
+            MARKER_FP:*) REMOTE_MARKER_FP="${line#MARKER_FP:}" ;;
+        esac
+    done <<< "$PROBE_RESULT"
+
+    if [[ "$REMOTE_EXISTS" != "true" ]]; then
+        echo "错误: 远端路径不存在: $REMOTE_HOST:$REMOTE_ABS"
+        echo "       （可能从未 handoff 过，或 marker 指向的 fork 槽位已删除）"
+        exit 1
+    fi
+
+    # 3. 本地安全校验：当前本地 FP 必须等于远端 marker 里记录的"handoff 时本地 FP"
+    #    匹配 → 本地自 handoff 以来未被改动，覆盖安全
+    #    不匹配 → 本地可能有新的更改，拒绝覆盖，除非 -f 兜底
+    local LOCAL_FP
+    LOCAL_FP=$(git_fingerprint)
+
+    if [[ "$HANDOFF_FORCE" != "true" ]]; then
+        if [[ -z "$LOCAL_FP" ]]; then
+            echo "错误: 本地不是 git 仓库，无法校验是否有新改动"
+            echo "       若确认覆盖安全，加 -f/--force 强制执行"
+            exit 1
+        fi
+        if [[ -z "$REMOTE_MARKER_FP" ]]; then
+            echo "错误: 远端未找到 .sync_handoff_mark（或 fingerprint 字段缺失），无从校验本地状态"
+            echo "       可能从未 handoff 过此目录，或 marker 已被删除"
+            echo "       若确认覆盖安全，加 -f/--force 强制执行"
+            exit 1
+        fi
+        if [[ "$LOCAL_FP" != "$REMOTE_MARKER_FP" ]]; then
+            echo "错误: 本地 git 状态已偏离 handoff 时的状态（本地可能有新改动），拒绝覆盖"
+            echo "       本地当前 FP: $LOCAL_FP"
+            echo "       marker 记录: $REMOTE_MARKER_FP"
+            echo "       建议: 查看 git status / git diff；然后 stash / commit / checkout -- . / 手动比对；或加 -f/--force 强制执行"
+            exit 1
+        fi
+        echo "本地校验: FP 与 marker 匹配，本地自 handoff 以来未被改动 ✓"
+    else
+        echo "提示: -f/--force 已启用，跳过本地状态校验"
+    fi
+
+    # 4. 敲定 REMOTE_TARGET 供 perform_sync 使用
+    REMOTE_TARGET="$REMOTE_HOST:$RECLAIM_SOURCE_PATH"
+
+    if [[ -n "$HANDOFF_SLOT_SUFFIX" ]]; then
+        echo "提示: --suffix 在 reclaim 模式下无作用（已忽略）"
+    fi
+
+    # 5. 两端的 marker 都不互相串台（handoff_mark 只该存在远端，reclaim_mark 只该存在本地）
+    HANDOFF_EXTRA_OPTS+=(
+        "--exclude=.sync_handoff_mark"
+        "--exclude=.sync_reclaim_mark"
+    )
+
+    # 6. 复用 handoff 的"完整工作现场"语义：剔除 .git/ 排除 + 注入 gitignore 过滤
+    local filtered=()
+    local rule stripped
+    for rule in "${EXCLUDES[@]}"; do
+        stripped="${rule#--exclude=}"
+        stripped="${stripped#\'}"; stripped="${stripped%\'}"
+        stripped="${stripped#\"}"; stripped="${stripped%\"}"
+        case "$stripped" in
+            .git|.git/|.git/*) continue ;;
+        esac
+        filtered+=("$rule")
+    done
+    EXCLUDES=("${filtered[@]}")
+
+    if [[ -z "${INCLUDE_ONLY[*]:-}" ]]; then
+        HANDOFF_EXTRA_OPTS+=(
+            "--filter=:- .gitignore"
+            "--filter=:- .git/info/exclude"
+        )
+    fi
+
+    echo "源: $REMOTE_HOST:$RECLAIM_SOURCE_PATH (绝对: $REMOTE_ABS)"
+    echo "目标: $LOCAL_PATH"
+    echo "原因: $REASON"
+    echo "========================"
+    echo
 }
 
 # 执行同步
@@ -590,6 +817,12 @@ perform_sync() {
             SOURCE="$LOCAL_PATH/"
             DEST="$REMOTE_TARGET"
             echo "模式: Handoff 接力推送 (不删除远程文件)"
+            ;;
+        reclaim)
+            # REMOTE_TARGET 已由 prepare_reclaim() 决定（canonical 或 marker 指向的槽位）
+            SOURCE="$REMOTE_TARGET/"
+            DEST="$LOCAL_PATH"
+            echo "模式: Reclaim 归队 (不删除本地文件)"
             ;;
     esac
     
@@ -639,10 +872,14 @@ main() {
     detect_paths     # 检测路径
     if [[ "$MODE" == "handoff" ]]; then
         prepare_handoff  # 检查远端、决定原位或 fork、注入 handoff 规则
+    elif [[ "$MODE" == "reclaim" ]]; then
+        prepare_reclaim  # 解析远端源路径（canonical 或 marker），探测存在性
     fi
     perform_sync     # 执行同步
     if [[ "$MODE" == "handoff" && "$DRY_RUN" != "true" ]]; then
-        write_handoff_marker  # 写入 marker，供下次 handoff 判定远端状态是否改动
+        write_handoff_marker handoff  # 刷新两端 marker 到本次 handoff 的同步点
+    elif [[ "$MODE" == "reclaim" && "$DRY_RUN" != "true" ]]; then
+        write_handoff_marker reclaim  # 刷新两端 marker 到本次 reclaim 的同步点
     fi
 }
 
