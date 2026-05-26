@@ -176,6 +176,9 @@ show_help() {
     -n, --dry-run          预览模式，不实际执行
         --suffix SUFFIX    handoff 模式 fork 槽位时的后缀名（默认: 时间戳）
     -f, --force            handoff/reclaim 模式跳过所有安全检查，强制覆盖（慎用）
+        --include-only PATTERN
+                           仅同步匹配 PATTERN 的内容（可重复传入，追加到配置文件的
+                           INCLUDE_ONLY 之后）；优先级最高，会忽略所有 EXCLUDE 规则
     -h, --help             显示此帮助信息
 
 示例:
@@ -187,6 +190,8 @@ show_help() {
     $0 -H myserver -m handoff  # 临时指定远程 SSH host
     $0 -m handoff --suffix mobile  # fork 时用 "mobile" 作为槽位后缀
     $0 -n                  # 预览模式
+    $0 -m copy-push --include-only refs.bib              # 仅推送单个文件（顶层）
+    $0 -m copy-push --include-only assets --include-only '*.tex'  # 目录 + 顶层通配
 EOF
 }
 
@@ -217,6 +222,10 @@ parse_args() {
             -f|--force)
                 HANDOFF_FORCE=true
                 shift
+                ;;
+            --include-only)
+                INCLUDE_ONLY+=("$2")
+                shift 2
                 ;;
             -h|--help)
                 show_help
@@ -901,8 +910,8 @@ perform_sync() {
 main() {
     load_config      # 加载配置文件（用户配置 → 项目配置）
     init_vars        # 基于配置初始化工作变量
-    merge_excludes   # 合并排除规则
-    parse_args "$@"  # 解析命令行参数（可覆盖配置）
+    parse_args "$@"  # 解析命令行参数（可覆盖配置；也可向 INCLUDE_ONLY 追加 pattern）
+    merge_excludes   # 合并排除规则（消费配置 + CLI 的 INCLUDE_ONLY）
     validate_config  # 校验必需配置项（DEFAULT_REMOTE_HOST）
     validate_mode    # 验证同步模式
     detect_paths     # 检测路径
