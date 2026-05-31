@@ -1,6 +1,11 @@
-# skill-mgr
+# asmgr
 
-AI Agent Skills 管理工具，支持从 GitHub 或本地路径添加 skills 到中央仓库，并管理到各 AI agent 的符号链接或复制。
+**asmgr** — `~/agent-settings` 中央配置仓库的命令行管家：统一管理 skills、subagents、项目局域清单与
+Claude Code plugin/marketplace，横跨 cursor / claude-code / codex / gemini，一套 scope 模型
+（默认当前目录 / `-g` 全局 / `-p` 项目 / `--all`）。
+
+> 原名 **skill-mgr**；目录与入口脚本已更名为 `asmgr`，但 `~/bin/skill-mgr` 仍作为兼容别名指向同一脚本，
+> 旧命令与文档示例继续可用。新机器安装可一并建 `ln -sf $(pwd)/asmgr/asmgr.sh ~/bin/skill-mgr`。
 
 ## 功能特性
 
@@ -22,7 +27,7 @@ cd ~/Projects/linuxtools
 
 # 创建符号链接到 ~/bin
 mkdir -p ~/bin
-ln -sf $(pwd)/skill-mgr/skill_mgr.sh ~/bin/skill-mgr
+ln -sf $(pwd)/asmgr/asmgr.sh ~/bin/asmgr
 
 # 确保 ~/bin 在 PATH 中
 echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
@@ -36,20 +41,20 @@ brew install yq
 
 | 命令 | 功能 |
 |------|------|
-| `skill-mgr add <source> [-a <agents>] [-g\|-p <dir>] [-c]` | 添加 skill 到中央目录并可选链接到 agents |
-| `skill-mgr list` | 列出所有已注册的 skills 及其安装状态 |
-| `skill-mgr status [--fix]` | 检查配置与符号链接的一致性 |
-| `skill-mgr sync --from-agents` | 从现有 agents 安装状态（link/copy）重建配置文件 |
-| `skill-mgr sync --from-config` | 从配置文件创建符号链接（用于新电脑部署） |
-| `skill-mgr remove <skill> [-a <agents>] [-g\|-p <dir>]` | 移除 skill（完全移除或从指定位置移除） |
+| `asmgr add <source> [-a <agents>] [-g\|-p <dir>] [-c]` | 添加 skill 到中央目录并可选链接到 agents |
+| `asmgr list` | 列出所有已注册的 skills 及其安装状态 |
+| `asmgr status [--fix]` | 检查配置与符号链接的一致性 |
+| `asmgr sync --from-agents` | 从现有 agents 安装状态（link/copy）重建配置文件 |
+| `asmgr sync --from-config` | 从配置文件创建符号链接（用于新电脑部署） |
+| `asmgr remove <skill> [-a <agents>] [-g\|-p <dir>]` | 移除 skill（完全移除或从指定位置移除） |
 
-Claude Code 的 plugin / marketplace 由官方 `claude plugin` CLI 管理；skill-mgr 只在 `sync` 里读写 `skills.yaml` 的 `claude_code` 段，不提供安装/卸载包装。详见下文。
+Claude Code 的 plugin / marketplace 由官方 `claude plugin` CLI 管理；asmgr 只在 `sync` 里读写 `skills.yaml` 的 `claude_code` 段，不提供安装/卸载包装。详见下文。
 
 ## 使用方法
 
 ### 安装模式
 
-skill-mgr 支持两种安装模式：
+asmgr 支持两种安装模式：
 
 #### 本地安装（默认）
 
@@ -60,11 +65,11 @@ skill-mgr 支持两种安装模式：
 
 ```bash
 # 安装到当前目录（默认）
-skill-mgr add ./my-skill -a cursor
+asmgr add ./my-skill -a cursor
 # 创建 ./.cursor/skills/my-skill
 
 # 安装到指定项目目录
-skill-mgr add ./my-skill -a cursor -p ~/projects/foo
+asmgr add ./my-skill -a cursor -p ~/projects/foo
 # 创建 ~/projects/foo/.cursor/skills/my-skill
 ```
 
@@ -76,7 +81,7 @@ skill-mgr add ./my-skill -a cursor -p ~/projects/foo
 
 ```bash
 # 全局安装
-skill-mgr add ./my-skill -a cursor -g
+asmgr add ./my-skill -a cursor -g
 # 创建 ~/.cursor/skills/my-skill
 ```
 
@@ -90,11 +95,11 @@ skill-mgr add ./my-skill -a cursor -g
 
 ```bash
 # 符号链接模式（默认）
-skill-mgr add ./my-skill -a cursor -g
+asmgr add ./my-skill -a cursor -g
 # 创建符号链接: ~/.cursor/skills/my-skill -> ~/agent-settings/skills/my-skill
 
 # 复制模式
-skill-mgr add ./my-skill -a codex -g -c
+asmgr add ./my-skill -a codex -g -c
 # 复制目录到: ~/.codex/skills/my-skill
 ```
 
@@ -107,7 +112,7 @@ skill-mgr add ./my-skill -a codex -g -c
 ### add - 添加 Skill
 
 ```bash
-skill-mgr add <source> [-a <agents...>] [-g|-p <dir>] [-c]
+asmgr add <source> [-a <agents...>] [-g|-p <dir>] [-c]
 ```
 
 **source 支持三种格式：**
@@ -134,40 +139,40 @@ skill-mgr add <source> [-a <agents...>] [-g|-p <dir>] [-c]
 
 ```bash
 # 本地安装（默认）- 安装到当前目录
-skill-mgr add ./my-skill -a cursor
+asmgr add ./my-skill -a cursor
 # 创建 ./.cursor/skills/my-skill (符号链接)
 
 # 全局安装 - 安装到家目录
-skill-mgr add ./my-skill -a cursor -g
+asmgr add ./my-skill -a cursor -g
 # 创建 ~/.cursor/skills/my-skill (符号链接)
 
 # 复制模式安装（适用于不支持符号链接的 agent）
-skill-mgr add ./my-skill -a codex -g -c
+asmgr add ./my-skill -a codex -g -c
 # 复制到 ~/.codex/skills/my-skill (实际目录)
 
 # 混合使用：cursor 用符号链接，codex 用复制
-skill-mgr add ./my-skill -a cursor -g        # symlink
-skill-mgr add ./my-skill -a codex -g -c      # copy
+asmgr add ./my-skill -a cursor -g        # symlink
+asmgr add ./my-skill -a codex -g -c      # copy
 
 # 本地安装到指定项目
-skill-mgr add ./my-skill -a cursor -p ~/projects/foo
+asmgr add ./my-skill -a cursor -p ~/projects/foo
 # 创建 ~/projects/foo/.cursor/skills/my-skill
 
 # 多个 agents（全局安装）
-skill-mgr add skill-creator -a cursor claude-code -g
+asmgr add skill-creator -a cursor claude-code -g
 
 # 从 GitHub 添加（本地安装）
-skill-mgr add https://github.com/anthropics/skills/tree/main/skills/skill-creator -a cursor
+asmgr add https://github.com/anthropics/skills/tree/main/skills/skill-creator -a cursor
 
 # 从 GitHub 添加（全局安装）
-skill-mgr add https://github.com/anthropics/skills/tree/main/skills/pdf-editor -a cursor claude-code codex -g
+asmgr add https://github.com/anthropics/skills/tree/main/skills/pdf-editor -a cursor claude-code codex -g
 
 # 从本地路径添加（全局）
-skill-mgr add /path/to/my-skill -a cursor -g
+asmgr add /path/to/my-skill -a cursor -g
 
 # 使用 skill 名称（搜索中央目录）
-skill-mgr add skill-creator -a claude-code
-skill-mgr add creator -a cursor    # 模糊搜索
+asmgr add skill-creator -a claude-code
+asmgr add creator -a cursor    # 模糊搜索
 ```
 
 说明：
@@ -178,7 +183,7 @@ skill-mgr add creator -a cursor    # 模糊搜索
 ### list - 列出 Skills
 
 ```bash
-skill-mgr list
+asmgr list
 ```
 
 显示所有已注册的 skills 及其全局安装状态（link/copy）：
@@ -206,8 +211,8 @@ skill-mgr list
 ### status - 检查一致性
 
 ```bash
-skill-mgr status         # 仅检查
-skill-mgr status --fix   # 检查并自动修复
+asmgr status         # 仅检查
+asmgr status --fix   # 检查并自动修复
 ```
 
 检测四种状态（仅全局安装记录）：
@@ -221,17 +226,17 @@ skill-mgr status --fix   # 检查并自动修复
 项目内置了一键 smoke test 脚本，使用临时 `HOME` 和临时 skill 名称，不会污染真实配置，并自动处理确认提示：
 
 ```bash
-skill-mgr/smoke_test.sh
+asmgr/smoke_test.sh
 ```
 
 ### sync - 同步配置
 
 ```bash
 # 从全局符号链接/复制目录重建配置（首次使用或迁移）
-skill-mgr sync --from-agents
+asmgr sync --from-agents
 
 # 从配置创建全局符号链接/复制目录（新电脑部署）
-skill-mgr sync --from-config
+asmgr sync --from-config
 ```
 
 **使用场景：**
@@ -244,7 +249,7 @@ skill-mgr sync --from-config
 #### 完全移除（删除中央目录 + 全局安装 + 配置记录）
 
 ```bash
-skill-mgr remove <skill>
+asmgr remove <skill>
 ```
 
 完全移除 skill，包括：
@@ -257,7 +262,7 @@ skill-mgr remove <skill>
 
 示例：
 ```bash
-skill-mgr remove skill-creator
+asmgr remove skill-creator
 ```
 
 执行前会显示确认提示，输入 `y` 确认移除。
@@ -265,7 +270,7 @@ skill-mgr remove skill-creator
 #### 部分移除（仅从指定位置移除）
 
 ```bash
-skill-mgr remove <skill> -a <agents...> [-g|-p <dir>]
+asmgr remove <skill> -a <agents...> [-g|-p <dir>]
 ```
 
 仅从指定位置移除 skill（删除符号链接/目录，必要时更新配置），保留中央目录：
@@ -283,21 +288,21 @@ skill-mgr remove <skill> -a <agents...> [-g|-p <dir>]
 
 ```bash
 # 从全局安装移除
-skill-mgr remove skill-creator -a cursor -g
+asmgr remove skill-creator -a cursor -g
 
 # 从指定项目移除
-skill-mgr remove skill-creator -a cursor -p ~/projects/foo
+asmgr remove skill-creator -a cursor -p ~/projects/foo
 
 # 从当前目录移除
-skill-mgr remove skill-creator -a cursor
+asmgr remove skill-creator -a cursor
 
 # 从多个 agents 移除（全局）
-skill-mgr remove skill-creator -a cursor claude-code -g
+asmgr remove skill-creator -a cursor claude-code -g
 ```
 
 ### Claude Code plugin / marketplace
 
-Claude Code 的 marketplace 仓库体量大（每个是一个 git repo），直接嵌进 `agent-settings` 不现实。skill-mgr 的做法是：**plugin/marketplace 本身用官方 `claude plugin` CLI 管理，skill-mgr 只负责把"装过哪些"声明式记录到 `skills.yaml`**，通过 `sync` 双向搬运。
+Claude Code 的 marketplace 仓库体量大（每个是一个 git repo），直接嵌进 `agent-settings` 不现实。asmgr 的做法是：**plugin/marketplace 本身用官方 `claude plugin` CLI 管理，asmgr 只负责把"装过哪些"声明式记录到 `skills.yaml`**，通过 `sync` 双向搬运。
 
 **前置要求：** 本机已安装 Claude Code（`claude` CLI 可用）。
 
@@ -309,7 +314,7 @@ claude plugin marketplace add openai/codex-plugin-cc
 claude plugin install codex@openai-codex
 
 # 改完后把当前状态写进 yaml
-skill-mgr sync --from-agents
+asmgr sync --from-agents
 ```
 
 `sync --from-agents` 在重建 skill 记录的同时，会读 `~/.claude/plugins/known_marketplaces.json` 和 `claude plugin list`，把 marketplace/plugin 信息合并写入 `skills.yaml` 的 `claude_code` 段。
@@ -318,7 +323,7 @@ skill-mgr sync --from-agents
 
 ```bash
 # git clone agent-settings 到新机器后：
-skill-mgr sync --from-config
+asmgr sync --from-config
 ```
 
 除了部署 skills 符号链接/复制目录外，若 yaml 里存在 `claude_code` 段，还会自动调用 `claude plugin marketplace add` + `claude plugin install` 重建所有声明过的 marketplace 和 plugin。已存在的条目会标 `[skip]` 跳过，幂等。
@@ -358,7 +363,7 @@ claude_code:
 
 ```yaml
 # Skill installation registry
-# Auto-managed by skill-mgr, can be manually edited
+# Auto-managed by asmgr, can be manually edited
 
 version: 1
 
@@ -473,7 +478,7 @@ skills:
   - 参见 https://docs.claude.com/en/docs/claude-code
 - 标准 Unix 工具: `cp`, `ln`, `mkdir`, `basename`
 
-**注意**: skill-mgr 启动时会自动检查 yq/jq 是否已安装，如未安装会显示安装指引。
+**注意**: asmgr 启动时会自动检查 yq/jq 是否已安装，如未安装会显示安装指引。
 
 ## 常见问题
 
@@ -495,10 +500,10 @@ skills:
 
 ```bash
 # 查看所有 skills 状态
-skill-mgr list
+asmgr list
 
 # 检查一致性
-skill-mgr status
+asmgr status
 ```
 
 ## 相关链接

@@ -6,7 +6,7 @@ init_skills_yaml() {
         /bin/mkdir -p "$SKILLS_DIR"
         cat > "$SKILLS_YAML" << 'EOF'
 # Skill installation registry
-# Auto-managed by skill-mgr, can be manually edited
+# Auto-managed by asmgr, can be manually edited
 
 version: 1
 

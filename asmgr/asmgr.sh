@@ -1,217 +1,14 @@
 #!/bin/bash
 
-# Skill Manager - 管理 AI Agent Skills 的命令行工具
-# 支持从 GitHub 或本地路径添加 skills 到中央仓库，并可选地创建符号链接到各 AI agent
+# asmgr — agent-settings 中央配置仓库的命令行管家
+# 统一管理 skills、subagents、项目局域清单与 Claude Code plugin/marketplace，
+# 跨 cursor / claude-code / codex / gemini，一套 scope 模型（默认 cwd / -g / -p / --all）。
+# （原名 skill-mgr；该命令名仍作为兼容别名可用。）
 
 # 确保 PATH 包含标准命令路径（避免用户环境 PATH 缺失导致的 command not found）
 # 同时包含 Homebrew 默认路径（Apple Silicon: /opt/homebrew/bin）。
 export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
-# 检查必需的依赖工具
-check_dependencies() {
-    local missing=()
-
-    # 检查 yq
-    if ! command -v yq &>/dev/null; then
-        missing+=("yq")
-    fi
-
-    # 检查 git
-    if ! command -v git &>/dev/null; then
-        missing+=("git")
-    fi
-
-    # 检查 jq（仅 plugin/marketplace 子命令需要，但统一在启动时提示）
-    if ! command -v jq &>/dev/null; then
-        missing+=("jq")
-    fi
-
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        print_error "缺少必需的依赖工具: ${missing[*]}"
-        echo
-        echo "请安装缺失的工具："
-        echo
-
-        for tool in "${missing[@]}"; do
-            case "$tool" in
-                yq)
-                    echo "  yq - YAML 处理工具"
-                    echo "    macOS:   brew install yq"
-                    echo "    Linux:   参见 https://github.com/mikefarah/yq#install"
-                    echo "    官方仓库: https://github.com/mikefarah/yq"
-                    echo
-                    ;;
-                git)
-                    echo "  git - 版本控制工具"
-                    echo "    macOS:   brew install git"
-                    echo "    Linux:   sudo apt-get install git 或 sudo yum install git"
-                    echo
-                    ;;
-                jq)
-                    echo "  jq - JSON 处理工具（plugin/marketplace 子命令需要）"
-                    echo "    macOS:   brew install jq"
-                    echo "    Linux:   sudo apt-get install jq 或 sudo yum install jq"
-                    echo
-                    ;;
-            esac
-        done
-
-        return 1
-    fi
-
-    return 0
-}
-
-# 中央 skills 存储目录
-SKILLS_DIR="$HOME/agent-settings/skills"
-
-# Skills 配置文件
-SKILLS_YAML="$SKILLS_DIR/skills.yaml"
-
-# 规范化 base 目录路径
-# 展开 ~ 并转换相对路径为绝对路径
-normalize_base_dir() {
-    local path="$1"
-
-    # 展开波浪号
-    path="${path/#\~/$HOME}"
-
-    # 处理相对路径
-    if [[ "$path" == ./* || "$path" == ../* || "$path" == "." ]]; then
-        # 转换为绝对路径
-        if [[ -d "$path" ]]; then
-            path=$(cd "$path" && pwd)
-        else
-            # 目录不存在，尝试规范化
-            local dir=$(dirname "$path")
-            local base=$(basename "$path")
-            if [[ -d "$dir" ]]; then
-                path=$(cd "$dir" && pwd)/"$base"
-            else
-                path="$(/bin/pwd)/${path#./}"
-            fi
-        fi
-    fi
-
-    # 移除末尾斜杠
-    path="${path%/}"
-
-    echo "$path"
-}
-
-# 获取 agent 目录的函数
-# 参数:
-#   $1 - agent 名称 (cursor, claude-code, codex, gemini)
-#   $2 - base 目录 (可选，默认为 $HOME)
-get_agent_dir() {
-    local agent="$1"
-    local base_dir="${2:-$HOME}"
-
-    case "$agent" in
-        cursor)
-            echo "$base_dir/.cursor/skills"
-            ;;
-        claude-code)
-            echo "$base_dir/.claude/skills"
-            ;;
-        codex)
-            echo "$base_dir/.codex/skills"
-            ;;
-        gemini)
-            echo "$base_dir/.gemini/skills"
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-    return 0
-}
-
-# 支持的 agents 列表
-SUPPORTED_AGENTS="cursor claude-code codex gemini"
-
-# 颜色输出
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-# 打印函数
-print_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
-
-print_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# 通用 y/N 提示（需按回车确认；支持 y/yes, n/no；空输入走默认值）
-# 用法: if prompt_yes_no "是否继续? (y/N) " "N"; then ...; fi
-prompt_yes_no() {
-    local prompt="$1"
-    local default="${2:-N}"
-    local reply=""
-
-    while true; do
-        reply=""
-        read -r -p "$prompt" reply
-
-        # trim spaces
-        reply="${reply#"${reply%%[![:space:]]*}"}"
-        reply="${reply%"${reply##*[![:space:]]}"}"
-
-        if [[ -z "$reply" ]]; then
-            reply="$default"
-        fi
-
-        case "$reply" in
-            [Yy]|[Yy][Ee][Ss]) return 0 ;;
-            [Nn]|[Nn][Oo]) return 1 ;;
-            *) echo "请输入 y 或 n，然后按回车确认。" ;;
-        esac
-    done
-}
-
-# 本地时间戳（ISO 8601 + 时区偏移，如 2026-02-03T23:22:36+08:00）
-now_timestamp_local() {
-    local base tz
-    base=$(/bin/date +"%Y-%m-%dT%H:%M:%S")
-    tz=$(/bin/date +"%z") # e.g. +0800
-    echo "${base}${tz:0:3}:${tz:3:2}"
-}
-
-# 构建 yq 需要的数组字符串
-build_yaml_array() {
-    local items=("$@")
-    local yaml="["
-    local i
-    for i in "${!items[@]}"; do
-        [[ $i -gt 0 ]] && yaml+=", "
-        yaml+="\"${items[$i]}\""
-    done
-    yaml+="]"
-    echo "$yaml"
-}
-
-# 合并去重 agents（结果写入全局数组 _merged_agents）
-merge_unique_agents() {
-    _merged_agents=()
-    local agent existing found
-    for agent in "$@"; do
-        found=0
-        for existing in "${_merged_agents[@]}"; do
-            if [[ "$existing" == "$agent" ]]; then
-                found=1
-                break
-            fi
-        done
-        [[ $found -eq 0 ]] && _merged_agents+=("$agent")
-    done
-}
 
 
 # 定位脚本实际所在目录（解析 symlink），用于 source lib/*
@@ -224,30 +21,43 @@ done
 SCRIPT_DIR=$(cd "$(dirname "$_script")" && pwd)
 unset _script _dir
 
+source "$SCRIPT_DIR/lib/core.sh" || { echo "error: failed to load lib/core.sh" >&2; exit 1; }
+source "$SCRIPT_DIR/lib/materialize.sh" || { echo "error: failed to load lib/materialize.sh" >&2; exit 1; }
 source "$SCRIPT_DIR/lib/yaml.sh" || { echo "error: failed to load lib/yaml.sh" >&2; exit 1; }
 source "$SCRIPT_DIR/lib/plugin.sh" || { echo "error: failed to load lib/plugin.sh" >&2; exit 1; }
 source "$SCRIPT_DIR/lib/sources.sh" || { echo "error: failed to load lib/sources.sh" >&2; exit 1; }
+source "$SCRIPT_DIR/lib/project.sh" || { echo "error: failed to load lib/project.sh" >&2; exit 1; }
 
 # 显示帮助信息
 show_help() {
     cat << EOF
-Skill Manager - 管理 AI Agent Skills 的命令行工具
+asmgr — agent-settings 中央配置仓库的命令行管家
+（统一管理 skills / subagents / 项目局域清单 / Claude Code plugin；原名 skill-mgr，命令名仍兼容）
 
 用法:
-    skill-mgr <command> [options]
+    asmgr <command> [options]
 
 命令:
-    add <source> [-a <agents...>] [-g|-p <dir>] [-c]  添加 skill 到中央目录并可选链接到 agents
-    list                                          列出所有已注册的 skills 及其全局安装状态
-    status [--fix]                                检查配置与实际全局链接/复制的一致性
-    sync --from-agents                            从全局 agents 安装状态（link/copy）重建配置文件
-    sync --from-config                            从配置文件创建全局链接/复制目录（用于新电脑部署）
+    add <source> [-a <agents...>] [-s] [-g|-p <dir>] [-c]  添加 skill/subagent 并链接到 agents
+    list   [-g | -p <dir> | --all]                列出 skills/项目（默认=当前目录项目）
+    status [--fix] [-g | -p <dir> | --all]        检查链接一致性（默认=当前目录项目）
+    sync --from-agents [-g | -p <dir>]            从现有安装重建配置（默认=扫当前目录写项目清单）
+    sync --from-config [-g | -p <dir> | --all]    从配置重建链接（默认=当前项目；--all=全局+所有项目）
+    remove <skill> [-a <agents...>] [-s] [-g|-p <dir>]  从指定位置移除 skill/subagent
     remove <skill>                                完全移除 skill（中央目录 + 全局安装 + 配置）
-    remove <skill> -a <agents...> [-g|-p <dir>]   仅从指定位置移除 skill
+
+scope 约定（所有命令一致）:
+    默认（无 flag）  当前目录（项目局域）
+    -g, --global    全局（家目录）
+    -p <dir>        指定项目目录
+    --all           全局 + 所有已登记项目（仅 sync --from-config / status / list）
+
+  项目局域清单集中存放在 $PROJECTS_DIR/<name>.yaml（文件名由 \$HOME 相对路径派生，/ → __），
+  随 agent-settings 一起 git 同步。换新机器一键恢复: asmgr sync --from-config --all
 
 Claude Code plugin / marketplace（仅对 claude-code 生效，依赖 claude CLI）:
     plugin / marketplace 请通过官方 claude plugin CLI 管理（见官方文档）。
-    skill-mgr 不提供安装/卸载包装，仅在 sync 命令中读写 skills.yaml 的 claude_code 段：
+    asmgr 不提供安装/卸载包装，仅在 sync 命令中读写 skills.yaml 的 claude_code 段：
       sync --from-agents   同时把 claude 当前 marketplace+plugin 状态合并写入 yaml
       sync --from-config   同时把 yaml 中声明的 marketplace+plugin 部署到本机 claude
 
@@ -274,76 +84,96 @@ add 命令参数:
                         适用于不支持符号链接的 agents
                         默认为符号链接模式
 
-    注意: 默认为本地安装（当前目录），使用 -g 进行全局安装
+    -s, --subagent      把中央 agents/ 下的 subagent（目录或 .md）链接到 .claude/agents
+                        固定 claude-code，忽略 -a；项目/本地 scope 会写入清单 subagents 段
+
+    注意: 默认为本地安装（当前目录），写入项目清单；使用 -g 进行全局安装
 
 remove 命令参数:
     -a <agents...>      指定要移除的 agents
+    -s, --subagent      移除 subagent（从 .claude/agents 解链 + 更新清单）
     -g, --global        从全局安装移除
     -p, --project <dir> 从指定项目移除
                         不指定 -g/-p 时默认从当前目录移除
 
 示例:
     # 本地安装（默认）- 安装到当前目录
-    skill-mgr add ./my-skill -a cursor
+    asmgr add ./my-skill -a cursor
     # 创建 ./.cursor/skills/my-skill (符号链接)
 
     # 全局安装 - 安装到家目录
-    skill-mgr add ./my-skill -a cursor -g
+    asmgr add ./my-skill -a cursor -g
     # 创建 ~/.cursor/skills/my-skill (符号链接)
 
     # 复制模式安装（适用于不支持符号链接的 agent）
-    skill-mgr add ./my-skill -a codex -g -c
+    asmgr add ./my-skill -a codex -g -c
     # 复制到 ~/.codex/skills/my-skill (实际目录)
 
     # 混合使用：cursor 用符号链接，codex 用复制
-    skill-mgr add ./my-skill -a cursor -g        # symlink
-    skill-mgr add ./my-skill -a codex -g -c      # copy
+    asmgr add ./my-skill -a cursor -g        # symlink
+    asmgr add ./my-skill -a codex -g -c      # copy
 
     # 本地安装到指定项目
-    skill-mgr add ./my-skill -a cursor -p ~/projects/foo
+    asmgr add ./my-skill -a cursor -p ~/projects/foo
     # 创建 ~/projects/foo/.cursor/skills/my-skill
 
     # 多个 agents（全局安装）
-    skill-mgr add skill-creator -a cursor claude-code -g
+    asmgr add skill-creator -a cursor claude-code -g
 
     # 从 GitHub 添加（本地安装）
-    skill-mgr add https://github.com/anthropics/skills/tree/main/skills/skill-creator -a cursor
+    asmgr add https://github.com/anthropics/skills/tree/main/skills/skill-creator -a cursor
 
     # 列出所有 skills（显示全局安装状态）
-    skill-mgr list
+    asmgr list
 
     # 检查一致性状态
-    skill-mgr status
+    asmgr status
 
     # 自动修复不一致
-    skill-mgr status --fix
+    asmgr status --fix
 
     # 从全局 agents 安装状态（link/copy）生成配置（首次使用或迁移）
-    skill-mgr sync --from-agents
+    asmgr sync --from-agents
 
     # 在新电脑上从配置部署
-    skill-mgr sync --from-config
+    asmgr sync --from-config
 
     # 完全移除 skill（中央目录 + 全局安装）
-    skill-mgr remove skill-creator
+    asmgr remove skill-creator
 
     # 从全局安装移除
-    skill-mgr remove skill-creator -a cursor -g
+    asmgr remove skill-creator -a cursor -g
 
     # 从指定项目移除
-    skill-mgr remove skill-creator -a cursor -p ~/projects/foo
+    asmgr remove skill-creator -a cursor -p ~/projects/foo
 
     # 从当前目录移除
-    skill-mgr remove skill-creator -a cursor
+    asmgr remove skill-creator -a cursor
+
+    # === 项目局域 skill/subagent 工作流 ===
+    # 在项目里登记 skill（默认当前目录，写入项目清单）
+    cd ~/Projects/foo && asmgr add paper-writing-mentor -a claude-code codex
+    # 登记 subagent（链接到 .claude/agents）
+    asmgr add paper-writing-mentor -s
+    # 一键迁移：扫描项目现有链接生成清单
+    cd ~/Projects/foo && asmgr sync --from-agents
+    # 查看 / 检查当前项目
+    asmgr list
+    asmgr status --fix
+    # 换新机器：git pull agent-settings 后一键恢复全部
+    asmgr sync --from-config --all
+    # 移除某项目里的某 skill / subagent
+    cd ~/Projects/foo && asmgr remove paper-writing-mentor -a claude-code codex
+    asmgr remove paper-writing-mentor -s
 
     # Claude Code plugin 工作流
     #   1) 用官方 CLI 安装 marketplace 和 plugin：
     #        claude plugin marketplace add openai/codex-plugin-cc
     #        claude plugin install codex@openai-codex
     #   2) 写入 yaml 以便跨机同步：
-    #        skill-mgr sync --from-agents
+    #        asmgr sync --from-agents
     #   3) 新机器 clone agent-settings 后：
-    #        skill-mgr sync --from-config
+    #        asmgr sync --from-config
 
 中央存储目录: $SKILLS_DIR
 配置文件: $SKILLS_YAML
@@ -360,6 +190,7 @@ cmd_add() {
     local project_dir=""
     local use_copy=false
     local source_by_name=false
+    local is_subagent=false
 
     # 解析参数
     if [[ $# -eq 0 ]]; then
@@ -398,6 +229,10 @@ cmd_add() {
                 use_copy=true
                 shift
                 ;;
+            -s|--subagent)
+                is_subagent=true
+                shift
+                ;;
             *)
                 print_error "未知参数: $1"
                 show_help
@@ -406,25 +241,34 @@ cmd_add() {
         esac
     done
 
-    # -p 和 -g 互斥
-    if [[ "$is_global" == true && -n "$project_dir" ]]; then
-        print_error "-g 和 -p 参数不能同时使用"
-        return 1
-    fi
+    # 解析 scope → base 目录（含 -g/-p 互斥与 -p 存在性校验）
+    resolve_base_dir "$is_global" "$project_dir" || return 1
+    local base_dir="$RESOLVED_BASE_DIR"
 
-    # 确定 base 目录
-    local base_dir
-    if [[ "$is_global" == true ]]; then
-        base_dir="$HOME"
-    elif [[ -n "$project_dir" ]]; then
-        base_dir=$(normalize_base_dir "$project_dir")
-        if [[ ! -d "$base_dir" ]]; then
-            print_error "项目目录不存在: $base_dir"
+    # subagent 分支：在中央 agents/ 解析，链接到 .claude/agents，记录到项目清单 subagents 段
+    if [[ "$is_subagent" == true ]]; then
+        if [[ "$use_copy" == true ]]; then
+            print_warn "subagent 不支持 copy 模式，按 link 处理"
+        fi
+        if [[ ${#agents[@]} -gt 0 ]]; then
+            print_warn "subagent 固定链接到 claude-code(.claude/agents)，忽略 -a 指定的: ${agents[*]}"
+        fi
+        local sub_name
+        sub_name=$(resolve_subagent_name "$source") || return 1
+        if ! link_subagent_to_project "$base_dir" "$sub_name"; then
+            print_error "subagent 链接失败"
             return 1
         fi
-    else
-        # 默认为当前目录（本地模式）
-        base_dir="$(/bin/pwd)"
+        if [[ "$is_global" == true ]]; then
+            print_warn "全局 subagent 暂不写入配置记录（每机一次，非跨机痛点）"
+        else
+            local manifest
+            manifest="$(project_touch_manifest "$base_dir")"
+            pm_update_entry "$manifest" "subagents" "$sub_name" "link" "claude-code"
+            print_info "已记录到项目清单: $manifest"
+        fi
+        print_info "完成!"
+        return 0
     fi
 
     # 判断 source 类型
@@ -480,10 +324,18 @@ cmd_add() {
     if [[ "$source_by_name" == true ]]; then
         source_str="unknown"
     fi
-    if [[ "$is_global" == true && ${#installed_agents[@]} -gt 0 ]]; then
+    if [[ ${#installed_agents[@]} -gt 0 ]]; then
         local method="link"
         [[ "$use_copy" == true ]] && method="copy"
-        update_skills_yaml "$SKILL_NAME" "$source_str" 1 "$method" "${installed_agents[@]}"
+        if [[ "$is_global" == true ]]; then
+            update_skills_yaml "$SKILL_NAME" "$source_str" 1 "$method" "${installed_agents[@]}"
+        else
+            # 项目/本地 scope：记录到项目清单 skills 段（path 由 base_dir 现场派生）
+            local manifest
+            manifest="$(project_touch_manifest "$base_dir")"
+            pm_update_entry "$manifest" "skills" "$SKILL_NAME" "$method" "${installed_agents[@]}"
+            print_info "已记录到项目清单: $manifest"
+        fi
     fi
 
     if [[ ${#failed_agents[@]} -gt 0 ]]; then
@@ -499,11 +351,54 @@ cmd_add() {
     return 0
 }
 
-# 列出所有 skills 及其安装状态
+# 列出命令（默认=当前目录项目；-g 全局；-p 指定项目；--all 全部）
 cmd_list() {
+    local scope="cwd" project_dir=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -g|--global) scope="global"; shift ;;
+            -p|--project)
+                if [[ -z "$2" || "$2" =~ ^- ]]; then print_error "-p 参数需要指定项目目录"; return 1; fi
+                project_dir="$2"; scope="project"; shift 2 ;;
+            --all) scope="all"; shift ;;
+            *) print_error "未知参数: $1"; return 1 ;;
+        esac
+    done
+
+    case "$scope" in
+        global)
+            list_global
+            ;;
+        cwd)
+            local d m; d="$(/bin/pwd)"; m="$(project_manifest_file "$d")"
+            if [[ -f "$m" ]]; then
+                echo "当前项目:"; echo "========="; echo
+                project_list_one "$m"
+            else
+                print_info "当前目录无项目清单（用 -g 看全局，--all 看全部）"
+            fi
+            ;;
+        project)
+            local d m; d=$(normalize_base_dir "$project_dir"); m="$(project_manifest_file "$d")"
+            if [[ -f "$m" ]]; then project_list_one "$m"; else print_warn "无项目清单: $m"; fi
+            ;;
+        all)
+            list_global
+            echo; echo "已注册的项目:"; echo "============="; echo
+            local p
+            while IFS= read -r p; do
+                [[ -z "$p" ]] && continue
+                project_list_one "$PROJECTS_DIR/$p.yaml"
+            done <<< "$(pm_list_projects)"
+            ;;
+    esac
+}
+
+# 列出所有全局 skills 及其安装状态
+list_global() {
     if [[ ! -f "$SKILLS_YAML" ]]; then
         print_info "配置文件不存在: $SKILLS_YAML"
-        print_info "运行 'skill-mgr sync --from-agents' 从全局 agents 安装状态（link/copy）生成配置"
+        print_info "运行 'asmgr sync --from-agents' 从全局 agents 安装状态（link/copy）生成配置"
         return 0
     fi
 
@@ -607,50 +502,31 @@ status_check_configured_skill() {
         [[ -z "$agent_dir" ]] && continue
 
         local link_path="$agent_dir/$skill_name"
-
-        if [[ -L "$link_path" ]]; then
-            local target
-            target=$(readlink "$link_path")
-            if [[ "$target" == "$skill_source" ]]; then
-                echo -e "${GREEN}[OK]${NC} $skill_name -> $agent"
-            else
-                echo -e "${YELLOW}[WRONG]${NC} $skill_name -> $agent (链接目标错误: $target)"
+        local cls state actual
+        cls=$(mat_classify "$link_path" "$skill_source" "link")
+        IFS=$'\t' read -r state actual <<< "$cls"
+        case "$state" in
+            ok)
+                echo -e "${GREEN}[OK]${NC} $skill_name -> $agent" ;;
+            wrong_target)
+                echo -e "${YELLOW}[WRONG]${NC} $skill_name -> $agent (链接目标错误: $actual)"
                 found_issue=1
                 if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
-                    if /bin/rm "$link_path" && /bin/ln -sf "$skill_source" "$link_path"; then
-                        echo "  已修复"
-                    else
-                        print_error "修复失败: $link_path"
-                    fi
-                elif [[ $fix_mode -eq 1 ]]; then
-                    echo "  无法修复: skill 或 agent 目录不存在"
-                fi
-            fi
-        elif [[ -e "$link_path" ]]; then
-            echo -e "${YELLOW}[WRONG]${NC} $skill_name -> $agent (期望链接，实际为目录/文件)"
-            found_issue=1
-            if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
-                if /bin/rm -rf "$link_path" && /bin/ln -sf "$skill_source" "$link_path"; then
-                    echo "  已修复"
-                else
-                    print_error "修复失败: $link_path"
-                fi
-            elif [[ $fix_mode -eq 1 ]]; then
-                echo "  无法修复: skill 或 agent 目录不存在"
-            fi
-        else
-            echo -e "${RED}[MISSING]${NC} $skill_name -> $agent (配置有，链接不存在)"
-            found_issue=1
-            if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
-                if /bin/ln -sf "$skill_source" "$link_path"; then
-                    echo "  已创建链接"
-                else
-                    print_error "创建链接失败: $link_path"
-                fi
-            elif [[ $fix_mode -eq 1 ]]; then
-                echo "  无法修复: skill 或 agent 目录不存在"
-            fi
-        fi
+                    if /bin/rm "$link_path" && /bin/ln -sf "$skill_source" "$link_path"; then echo "  已修复"; else print_error "修复失败: $link_path"; fi
+                elif [[ $fix_mode -eq 1 ]]; then echo "  无法修复: skill 或 agent 目录不存在"; fi ;;
+            wrong_type)
+                echo -e "${YELLOW}[WRONG]${NC} $skill_name -> $agent (期望链接，实际为目录/文件)"
+                found_issue=1
+                if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
+                    if /bin/rm -rf "$link_path" && /bin/ln -sf "$skill_source" "$link_path"; then echo "  已修复"; else print_error "修复失败: $link_path"; fi
+                elif [[ $fix_mode -eq 1 ]]; then echo "  无法修复: skill 或 agent 目录不存在"; fi ;;
+            missing)
+                echo -e "${RED}[MISSING]${NC} $skill_name -> $agent (配置有，链接不存在)"
+                found_issue=1
+                if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
+                    if /bin/ln -sf "$skill_source" "$link_path"; then echo "  已创建链接"; else print_error "创建链接失败: $link_path"; fi
+                elif [[ $fix_mode -eq 1 ]]; then echo "  无法修复: skill 或 agent 目录不存在"; fi ;;
+        esac
     done <<< "$link_agents"
 
     while IFS= read -r agent; do
@@ -661,34 +537,25 @@ status_check_configured_skill() {
         [[ -z "$agent_dir" ]] && continue
 
         local link_path="$agent_dir/$skill_name"
-
-        if [[ -d "$link_path" && ! -L "$link_path" ]]; then
-            echo -e "${GREEN}[OK]${NC} $skill_name -> $agent (copy)"
-        elif [[ -e "$link_path" ]]; then
-            echo -e "${YELLOW}[WRONG]${NC} $skill_name -> $agent (期望 copy，实际非目录)"
-            found_issue=1
-            if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
-                if /bin/rm -rf "$link_path" && /bin/cp -r "$skill_source" "$link_path"; then
-                    echo "  已修复"
-                else
-                    print_error "修复失败: $link_path"
-                fi
-            elif [[ $fix_mode -eq 1 ]]; then
-                echo "  无法修复: skill 或 agent 目录不存在"
-            fi
-        else
-            echo -e "${RED}[MISSING]${NC} $skill_name -> $agent (配置有，copy 不存在)"
-            found_issue=1
-            if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
-                if /bin/cp -r "$skill_source" "$link_path"; then
-                    echo "  已复制"
-                else
-                    print_error "复制失败: $skill_source -> $link_path"
-                fi
-            elif [[ $fix_mode -eq 1 ]]; then
-                echo "  无法修复: skill 或 agent 目录不存在"
-            fi
-        fi
+        local cls state actual
+        cls=$(mat_classify "$link_path" "$skill_source" "copy")
+        IFS=$'\t' read -r state actual <<< "$cls"
+        case "$state" in
+            ok)
+                echo -e "${GREEN}[OK]${NC} $skill_name -> $agent (copy)" ;;
+            wrong_type)
+                echo -e "${YELLOW}[WRONG]${NC} $skill_name -> $agent (期望 copy，实际非目录)"
+                found_issue=1
+                if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
+                    if /bin/rm -rf "$link_path" && /bin/cp -r "$skill_source" "$link_path"; then echo "  已修复"; else print_error "修复失败: $link_path"; fi
+                elif [[ $fix_mode -eq 1 ]]; then echo "  无法修复: skill 或 agent 目录不存在"; fi ;;
+            missing)
+                echo -e "${RED}[MISSING]${NC} $skill_name -> $agent (配置有，copy 不存在)"
+                found_issue=1
+                if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
+                    if /bin/cp -r "$skill_source" "$link_path"; then echo "  已复制"; else print_error "复制失败: $skill_source -> $link_path"; fi
+                elif [[ $fix_mode -eq 1 ]]; then echo "  无法修复: skill 或 agent 目录不存在"; fi ;;
+        esac
     done <<< "$copy_agents"
 
     return $found_issue
@@ -709,25 +576,9 @@ status_scan_orphans() {
 
         [[ ! -d "$agent_dir" ]] && continue
 
-        for link in "$agent_dir"/*; do
-            [[ ! -e "$link" ]] && continue
-
-            local skill_name
-            skill_name=$(/usr/bin/basename "$link")
-            local method=""
-            if [[ -L "$link" ]]; then
-                local target
-                target=$(readlink "$link")
-                if [[ "$target" == "$SKILLS_DIR"/* ]]; then
-                    method="link"
-                else
-                    continue
-                fi
-            elif [[ -d "$link" && -d "$SKILLS_DIR/$skill_name" ]]; then
-                method="copy"
-            else
-                continue
-            fi
+        local method skill_name
+        while IFS=$'\t' read -r method skill_name; do
+            [[ -z "$method" ]] && continue
 
             local in_config=0
             if [[ -f "$SKILLS_YAML" ]] && yq -e ".skills.\"$skill_name\"" "$SKILLS_YAML" &>/dev/null; then
@@ -752,27 +603,55 @@ status_scan_orphans() {
                     echo "  已添加到配置"
                 fi
             fi
-        done
+        done <<< "$(mat_scan_central_links "$agent_dir" "$SKILLS_DIR" 1)"
     done
 
     return $found_issue
 }
 
+# 状态命令（默认=当前目录项目；-g 全局；-p 指定项目；--all 全部）
 cmd_status() {
-    local fix_mode=0
-
+    local fix_mode=0 scope="cwd" project_dir=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --fix)
-                fix_mode=1
-                shift
-                ;;
-            *)
-                print_error "未知参数: $1"
-                return 1
-                ;;
+            --fix) fix_mode=1; shift ;;
+            -g|--global) scope="global"; shift ;;
+            -p|--project)
+                if [[ -z "$2" || "$2" =~ ^- ]]; then print_error "-p 参数需要指定项目目录"; return 1; fi
+                project_dir="$2"; scope="project"; shift 2 ;;
+            --all) scope="all"; shift ;;
+            *) print_error "未知参数: $1"; return 1 ;;
         esac
     done
+
+    case "$scope" in
+        global)
+            status_global "$fix_mode"
+            ;;
+        cwd)
+            local d m; d="$(/bin/pwd)"; m="$(project_manifest_file "$d")"
+            if [[ -f "$m" ]]; then
+                project_status_one "$m" "$fix_mode"
+            else
+                print_warn "当前目录无项目清单: $m"
+                print_info "试试 -g（全局）或 --all（全部）"
+            fi
+            ;;
+        project)
+            local d m; d=$(normalize_base_dir "$project_dir"); m="$(project_manifest_file "$d")"
+            if [[ -f "$m" ]]; then project_status_one "$m" "$fix_mode"; else print_warn "无项目清单: $m"; fi
+            ;;
+        all)
+            status_global "$fix_mode"
+            echo; echo "检查项目链接一致性..."; echo "====================="; echo
+            project_status_all "$fix_mode"
+            ;;
+    esac
+}
+
+# 检查全局配置与实际全局链接/复制的一致性
+status_global() {
+    local fix_mode="${1:-0}"
 
     echo "检查 Skills 一致性状态..."
     echo "========================="
@@ -796,31 +675,34 @@ cmd_status() {
         echo -e "${GREEN}所有检查通过，配置与实际状态一致${NC}"
     else
         if [[ $fix_mode -eq 0 ]]; then
-            echo "发现不一致，运行 'skill-mgr status --fix' 自动修复"
+            echo "发现不一致，运行 'asmgr status --fix' 自动修复"
         else
             echo "修复完成"
         fi
     fi
+
+    # 缺陷②修复：发现不一致即返回非零，与 project_status_one 的退出码语义对齐
+    # （检测期已置位的 has_issues；--fix 后仍返回非零，与项目侧一致）。
+    return $has_issues
 }
 
 # 同步命令
 cmd_sync() {
-    local mode=""
+    local mode="" scope="cwd" project_dir=""
 
     # 解析参数
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --from-agents)
-                mode="from-agents"
-                shift
-                ;;
-            --from-config)
-                mode="from-config"
-                shift
-                ;;
+            --from-agents) mode="from-agents"; shift ;;
+            --from-config) mode="from-config"; shift ;;
+            -g|--global) scope="global"; shift ;;
+            -p|--project)
+                if [[ -z "$2" || "$2" =~ ^- ]]; then print_error "-p 参数需要指定项目目录"; return 1; fi
+                project_dir="$2"; scope="project"; shift 2 ;;
+            --all) scope="all"; shift ;;
             *)
                 print_error "未知参数: $1"
-                echo "用法: skill-mgr sync --from-agents | --from-config"
+                echo "用法: asmgr sync --from-agents | --from-config [-g | -p <dir> | --all]"
                 return 1
                 ;;
         esac
@@ -828,15 +710,37 @@ cmd_sync() {
 
     if [[ -z "$mode" ]]; then
         print_error "请指定同步方向: --from-agents 或 --from-config"
-        echo "  --from-agents  从现有 agents 安装状态（link/copy）重建配置文件"
-        echo "  --from-config  从配置文件创建符号链接"
+        echo "  --from-agents  从现有安装状态（link/copy）重建配置（默认=当前目录项目；-g=全局 skills.yaml）"
+        echo "  --from-config  从配置创建符号链接（默认=当前项目；-g=全局；--all=全局+所有项目）"
         return 1
     fi
 
     if [[ "$mode" == "from-agents" ]]; then
-        sync_from_agents
+        case "$scope" in
+            global) sync_from_agents ;;
+            project) local d; d=$(normalize_base_dir "$project_dir"); project_scan_one "$d" ;;
+            cwd) project_scan_one "$(/bin/pwd)" ;;
+            all) print_error "--all 不适用于 --from-agents（无法发现所有项目目录）"; return 1 ;;
+        esac
     else
-        sync_from_config
+        case "$scope" in
+            global) sync_from_config ;;
+            project) local d; d=$(normalize_base_dir "$project_dir"); project_deploy_one "$(project_manifest_file "$d")" ;;
+            cwd)
+                local d m; d="$(/bin/pwd)"; m="$(project_manifest_file "$d")"
+                if [[ -f "$m" ]]; then
+                    project_deploy_one "$m"
+                else
+                    print_warn "当前目录无项目清单: $m"
+                    print_info "试试 -g（全局）或 --all（全局+所有项目）"
+                fi
+                ;;
+            all)
+                sync_from_config
+                echo; print_info "部署所有项目..."
+                project_deploy_all
+                ;;
+        esac
     fi
 }
 
@@ -848,7 +752,7 @@ sync_from_agents() {
     /bin/mkdir -p "$SKILLS_DIR"
     cat > "$SKILLS_YAML" << 'EOF'
 # Skill installation registry
-# Auto-managed by skill-mgr, can be manually edited
+# Auto-managed by asmgr, can be manually edited
 
 version: 1
 
@@ -864,30 +768,13 @@ EOF
 
         [[ ! -d "$agent_dir" ]] && continue
 
-        for link in "$agent_dir"/*; do
-            [[ ! -e "$link" ]] && continue
-
-            local skill_name
-            skill_name=$(/usr/bin/basename "$link")
-            local method=""
-            if [[ -L "$link" ]]; then
-                local target
-                target=$(readlink "$link")
-                if [[ "$target" == "$SKILLS_DIR"/* ]]; then
-                    method="link"
-                else
-                    continue
-                fi
-            elif [[ -d "$link" && -d "$SKILLS_DIR/$skill_name" ]]; then
-                method="copy"
-            else
-                continue
-            fi
-
+        local method skill_name
+        while IFS=$'\t' read -r method skill_name; do
+            [[ -z "$method" ]] && continue
             print_info "发现: $skill_name -> $agent ($method)"
             update_skills_yaml "$skill_name" "unknown" 1 "$method" "$agent"
             found_any=1
-        done
+        done <<< "$(mat_scan_central_links "$agent_dir" "$SKILLS_DIR" 1)"
     done
 
     if [[ $found_any -eq 0 ]]; then
@@ -940,7 +827,6 @@ sync_from_config() {
         copy_agents=$(get_skill_agents_copy "$skill_name")
 
         local agent_dir
-        local target_path
 
         while IFS= read -r agent; do
             [[ -z "$agent" ]] && continue
@@ -955,29 +841,7 @@ sync_from_config() {
                 /bin/mkdir -p "$agent_dir"
             fi
 
-            target_path="$agent_dir/$skill_name"
-
-            if [[ -L "$target_path" ]]; then
-                local target
-                target=$(readlink "$target_path")
-                if [[ "$target" == "$skill_source" ]]; then
-                    print_info "  ✓ $skill_name -> $agent (已存在)"
-                    continue
-                fi
-                if ! /bin/rm "$target_path"; then
-                    print_error "删除旧链接失败: $target_path"
-                    continue
-                fi
-            elif [[ -e "$target_path" ]]; then
-                print_warn "目标位置已存在非符号链接: $target_path，跳过"
-                continue
-            fi
-
-            if ! /bin/ln -sf "$skill_source" "$target_path"; then
-                print_error "创建符号链接失败: $target_path"
-                continue
-            fi
-            print_info "  ✓ $skill_name -> $agent (已创建)"
+            mat_deploy_link "$skill_source" "$agent_dir" "$skill_name" "$agent"
         done <<< "$link_agents"
 
         while IFS= read -r agent; do
@@ -993,21 +857,7 @@ sync_from_config() {
                 /bin/mkdir -p "$agent_dir"
             fi
 
-            target_path="$agent_dir/$skill_name"
-
-            if [[ -d "$target_path" && ! -L "$target_path" ]]; then
-                print_info "  ✓ $skill_name -> $agent (已存在 copy)"
-                continue
-            fi
-            if [[ -e "$target_path" ]]; then
-                print_warn "目标位置已存在非目录: $target_path，跳过"
-                continue
-            fi
-            if ! /bin/cp -r "$skill_source" "$target_path"; then
-                print_error "复制失败: $skill_source -> $target_path"
-                continue
-            fi
-            print_info "  ✓ $skill_name -> $agent (copy 已创建)"
+            mat_deploy_copy "$skill_source" "$agent_dir" "$skill_name" "$agent"
         done <<< "$copy_agents"
     done <<< "$skills"
 
@@ -1137,8 +987,23 @@ remove_skill_from_agents() {
                 remove_agent_from_skill_field "$skill_name" "$field" "$agent"
                 remove_skill_if_empty "$skill_name"
             fi
+        elif [[ "$mode" == "local" ]]; then
+            local manifest
+            manifest="$(project_manifest_file "$base_dir")"
+            if [[ -f "$manifest" ]]; then
+                local field
+                field=$(agents_field_for_method "$actual_method")
+                pm_remove_entry_agent "$manifest" "skills" "$skill_name" "$field" "$agent"
+                pm_remove_entry_if_empty "$manifest" "skills" "$skill_name"
+            fi
         fi
     done
+
+    if [[ "$mode" == "local" ]]; then
+        local manifest
+        manifest="$(project_manifest_file "$base_dir")"
+        [[ -f "$manifest" ]] && pm_prune_project "$manifest" && print_info "项目清单已空，已删除: $manifest"
+    fi
 
     print_info "完成"
 }
@@ -1148,14 +1013,15 @@ cmd_remove() {
     local agents=()
     local is_global=false
     local project_dir=""
+    local is_subagent=false
 
     if [[ $# -eq 0 ]]; then
         print_error "缺少 skill 名称"
         echo "用法:"
-        echo "  skill-mgr remove <skill>                    # 完全移除"
-        echo "  skill-mgr remove <skill> -a <agents>        # 仅从指定 agents 移除（全局）"
-        echo "  skill-mgr remove <skill> -a <agents> -g     # 从全局安装移除"
-        echo "  skill-mgr remove <skill> -a <agents> -p <dir> # 从指定项目移除"
+        echo "  asmgr remove <skill>                    # 完全移除"
+        echo "  asmgr remove <skill> -a <agents>        # 仅从指定 agents 移除（全局）"
+        echo "  asmgr remove <skill> -a <agents> -g     # 从全局安装移除"
+        echo "  asmgr remove <skill> -a <agents> -p <dir> # 从指定项目移除"
         return 1
     fi
 
@@ -1183,6 +1049,10 @@ cmd_remove() {
                 project_dir="$2"
                 shift 2
                 ;;
+            -s|--subagent)
+                is_subagent=true
+                shift
+                ;;
             *)
                 print_error "未知参数: $1"
                 return 1
@@ -1195,22 +1065,36 @@ cmd_remove() {
         return 1
     fi
 
+    # subagent 分支：从 .claude/agents 解链 + 更新项目清单 subagents 段
+    if [[ "$is_subagent" == true ]]; then
+        resolve_base_dir "$is_global" "$project_dir" || return 1
+        local base_dir="$RESOLVED_BASE_DIR"
+        local sub_name
+        sub_name=$(resolve_subagent_name "$skill_name") || sub_name="$skill_name"
+        unlink_subagent_from_project "$base_dir" "$sub_name"
+        if [[ "$is_global" != true ]]; then
+            local manifest
+            manifest="$(project_manifest_file "$base_dir")"
+            if [[ -f "$manifest" ]]; then
+                pm_remove_entry_agent "$manifest" "subagents" "$sub_name" "agents_link" "claude-code"
+                pm_remove_entry_if_empty "$manifest" "subagents" "$sub_name"
+                pm_prune_project "$manifest" && print_info "项目清单已空，已删除: $manifest"
+            fi
+        fi
+        print_info "完成"
+        return 0
+    fi
+
     if [[ ${#agents[@]} -eq 0 ]]; then
         remove_skill_completely "$skill_name"
     else
-        local base_dir
+        resolve_base_dir "$is_global" "$project_dir" || return 1
+        local base_dir="$RESOLVED_BASE_DIR"
         if [[ "$is_global" == true ]]; then
-            base_dir="$HOME"
             print_info "从全局安装移除 skill: $skill_name"
         elif [[ -n "$project_dir" ]]; then
-            base_dir=$(normalize_base_dir "$project_dir")
-            if [[ ! -d "$base_dir" ]]; then
-                print_error "项目目录不存在: $base_dir"
-                return 1
-            fi
             print_info "从项目 $base_dir 移除 skill: $skill_name"
         else
-            base_dir="$(/bin/pwd)"
             print_info "从当前目录移除 skill: $skill_name"
         fi
 

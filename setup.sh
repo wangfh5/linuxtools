@@ -1,5 +1,5 @@
 #!/bin/bash
-# 一键配置脚本 - 安装 sync-remote 和 skill-mgr 到全局 PATH
+# 一键配置脚本 - 安装 sync-remote 和 asmgr 到全局 PATH
 
 set -e
 
@@ -23,8 +23,11 @@ echo "[2/3] 创建符号链接..."
 ln -sf "$SCRIPT_DIR/sync/sync_to_remote.sh" "$BIN_DIR/sync-remote"
 echo "  ✓ sync-remote -> $SCRIPT_DIR/sync/sync_to_remote.sh"
 
-ln -sf "$SCRIPT_DIR/skill-mgr/skill_mgr.sh" "$BIN_DIR/skill-mgr"
-echo "  ✓ skill-mgr -> $SCRIPT_DIR/skill-mgr/skill_mgr.sh"
+ln -sf "$SCRIPT_DIR/asmgr/asmgr.sh" "$BIN_DIR/asmgr"
+echo "  ✓ asmgr -> $SCRIPT_DIR/asmgr/asmgr.sh"
+# 兼容别名：原名 skill-mgr 仍可用
+ln -sf "$SCRIPT_DIR/asmgr/asmgr.sh" "$BIN_DIR/skill-mgr"
+echo "  ✓ skill-mgr (兼容别名) -> $SCRIPT_DIR/asmgr/asmgr.sh"
 
 # 3. 检查并配置 PATH
 echo "[3/3] 检查 PATH 配置..."
@@ -60,4 +63,4 @@ echo ""
 echo "=== 配置完成 ==="
 echo ""
 echo "如果 PATH 刚被修改，请运行 source $SHELL_RC 或重新打开终端"
-echo "验证安装: sync-remote -h && skill-mgr --help"
+echo "验证安装: sync-remote -h && asmgr --help"

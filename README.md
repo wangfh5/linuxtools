@@ -16,25 +16,26 @@ sync-remote -m pull      # 从远程拉取
 
 详见 [sync/README.md](./sync/README.md)
 
-### [skill-mgr](./skill-mgr/)
-AI Agent Skills 管理工具，支持从 GitHub 或本地路径添加 skills 到中央仓库。
+### [asmgr](./asmgr/)
+`~/agent-settings` 中央配置仓库的命令行管家：统一管理 skills、subagents、项目局域清单与
+Claude Code plugin/marketplace（原名 skill-mgr，`skill-mgr` 命令仍作为兼容别名可用）。
 
-**核心特性**：统一管理 - 中央存储 + 符号链接，支持 cursor/claude-code/codex 多个 agents。
+**核心特性**：中央存储 + 符号链接，跨 cursor/claude-code/codex/gemini，统一 scope 模型。
 
 **依赖**: 需要安装 `yq` (https://github.com/mikefarah/yq)
 
 ```bash
-skill-mgr add <github-url>           # 从 GitHub 添加 skill
-skill-mgr add <github-url> -a cursor # 添加并链接到 cursor
+asmgr add <github-url>           # 从 GitHub 添加 skill
+asmgr add <github-url> -a cursor # 添加并链接到 cursor
 ```
 
-详见 [skill-mgr/README.md](./skill-mgr/README.md)
+详见 [asmgr/README.md](./asmgr/README.md)
 
 ## 安装
 
 ### 前置依赖
 
-skill-mgr 需要 `yq` 工具：
+asmgr 需要 `yq` 工具：
 
 ```bash
 # macOS
