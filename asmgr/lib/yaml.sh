@@ -8,8 +8,6 @@ init_skills_yaml() {
 # Skill installation registry
 # Auto-managed by asmgr, can be manually edited
 
-version: 1
-
 skills: {}
 EOF
     fi

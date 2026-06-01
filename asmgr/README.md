@@ -280,7 +280,6 @@ asmgr sync --from-config -g       # 或 --all
 位于 `~/agent-settings/skills/skills.yaml`，记录全局安装：
 
 ```yaml
-version: 1
 skills:
   skill-creator:
     agents_link: [claude-code, cursor]   # 以符号链接安装的 agents
@@ -289,10 +288,10 @@ skills:
     added_at: "2026-02-03T23:22:36+08:00" # 本地时区，最近一次 add 的时间
 ```
 
-启用 plugin/marketplace 后，`version` 升到 2 并新增 `claude_code` 段（仅涉及 plugin 的仓库才会出现，向后兼容）：
+当全局 `sync --from-agents -g` 在 `claude` CLI 可用时导入 plugin/marketplace，会新增 `claude_code` 段
+（是否带 plugin 数据看该段是否存在）：
 
 ```yaml
-version: 2
 claude_code:
   marketplaces:
     codex-plugin-cc:
@@ -311,7 +310,6 @@ claude_code:
 去掉 `source`/`added_at`，加 `subagents` 段与权威定位字段 `path`：
 
 ```yaml
-version: 1
 path: Projects/foo          # $HOME 内存相对路径；$HOME 外存绝对路径（以 / 开头）
 skills:
   paper-writing-mentor:

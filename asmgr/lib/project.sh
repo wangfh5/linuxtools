@@ -3,7 +3,6 @@
 # 清单文件: $PROJECTS_DIR/<name>.yaml，每项目一个。结构对齐 skills.yaml，
 # 去掉 source/added_at，加平行 subagents 段与权威定位字段 path：
 #
-#   version: 1
 #   path: Projects/foo            # $HOME 内存相对路径；$HOME 外存绝对路径（以 / 开头）
 #   skills:
 #     <name>:
@@ -71,7 +70,6 @@ init_project_manifest() {
         /bin/mkdir -p "$PROJECTS_DIR"
         cat > "$file" << EOF
 # Project-local skill/subagent registry — managed by asmgr
-version: 1
 path: $stored_path
 skills: {}
 subagents: {}

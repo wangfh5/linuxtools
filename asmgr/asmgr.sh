@@ -727,8 +727,6 @@ sync_from_agents() {
 # Skill installation registry
 # Auto-managed by asmgr, can be manually edited
 
-version: 1
-
 skills: {}
 EOF
 

@@ -4,7 +4,6 @@
 #   ~/.claude/plugins/known_marketplaces.json  —— marketplace 注册表
 #   claude plugin list                         —— 已启用 plugin 列表
 # skills.yaml 扩展：顶层 `claude_code:` 段，含 marketplaces（map）和 plugins（list）。
-# 首次写入时自动将 `version` 升到 2。
 
 CLAUDE_PLUGINS_DIR="$HOME/.claude/plugins"
 CLAUDE_KNOWN_MKT="$CLAUDE_PLUGINS_DIR/known_marketplaces.json"
@@ -19,11 +18,10 @@ check_claude_cli() {
     return 0
 }
 
-# 确保 skills.yaml 有 claude_code 段，并把 version 提到 2
+# 确保 skills.yaml 有 claude_code 段
 ensure_claude_code_section() {
     init_skills_yaml
     yq -i '
-        .version = 2 |
         .claude_code.marketplaces = (.claude_code.marketplaces // {}) |
         .claude_code.plugins = (.claude_code.plugins // [])
     ' "$SKILLS_YAML"

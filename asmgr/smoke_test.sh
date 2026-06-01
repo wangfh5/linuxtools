@@ -716,7 +716,6 @@ tc_plugin_yaml_roundtrip() {
         update_plugin_in_yaml "plug-y" "mkt-x" "user"
     )
     assert_present "claude_code round-trip 写出 yaml" "$yaml"
-    assert_eq "首次写入 plugin 段把 version 升到 2" "2" "$(yq -r '.version' "$yaml")"
     assert_eq "marketplace source round-trip" "owner/repo-x" \
         "$(yq -r '.claude_code.marketplaces."mkt-x".source' "$yaml")"
     assert_eq "plugin name round-trip" "plug-y" \
@@ -753,13 +752,12 @@ tc_plugin_from_agents_import() {
 { "cool-mkt": { "source": { "source": "github", "repo": "owner/cool" } } }
 JSON
     mk_central_skill "$H" "alpha"
-    run add alpha -a claude-code -g                    # 先有 v1 yaml + 链接
+    run add alpha -a claude-code -g                    # 先有 yaml + 链接
 
     run_fake "$fb" sync --from-agents -g               # plugin_sync_from_claude 走 fake CLI
     assert_rc "sync --from-agents -g 退出码 0" 0
     # 证明确实命中了 stub（只有 stub 会写日志）——否则 import 可能靠沙箱内 json 假性通过
     assert_contains "fake claude 确被调用 (plugin list)" "$(cat "$log" 2>/dev/null)" "plugin list"
-    assert_eq "version 升到 2" "2" "$(yq -r '.version' "$yaml")"
     assert_eq "导入 marketplace source" "owner/cool" \
         "$(yq -r '.claude_code.marketplaces."cool-mkt".source' "$yaml")"
     assert_eq "导入 plugin name" "cool-plugin" \
@@ -780,7 +778,6 @@ tc_plugin_from_config_deploy() {
     mk_central_skill "$H" "alpha"
     # 手写一个含 claude_code 段的 yaml（注意：skills 不能为空，否则 sync 在部署 plugin 前提前返回）
     cat > "$yaml" <<'YAML'
-version: 2
 skills:
   alpha:
     agents_link: [cursor]
