@@ -232,6 +232,31 @@ tc_add_global_link_and_record() {
     assert_contains "add 完成消息" "$OUT" "添加完成"
 }
 
+tc_add_local_overwrite() {
+    note "add <path>：中央已存在该 skill → 提示覆盖（拒绝=保留现有并返回 0；接受=rm+cp 真覆盖）"
+    H=$(new_home); seed_agent_dirs "$H"
+    local src; src=$(mk_src_skill "$TMP_ROOT/ow_src" "alpha")
+    run add "$src" -a cursor -g
+    assert_rc "首次 add 退出码 0" 0
+    assert_present "中央目录已建 skill" "$H/agent-settings/skills/alpha/SKILL.md"
+
+    # 在源里加一个标记文件，用来判别中央目录是否被真正覆盖
+    printf 'mark\n' > "$src/MARKER.txt"
+
+    # 拒绝覆盖（默认 N）：保留现有、返回 0、标记文件不应进入中央目录
+    run add "$src" -a cursor -g
+    assert_rc "拒绝覆盖仍返回 0" 0
+    assert_contains "提示 Skill 已存在" "$OUT" "已存在"
+    assert_contains "拒绝后提示取消操作" "$OUT" "取消操作"
+    assert_absent "拒绝覆盖：中央目录未被替换（无 MARKER）" "$H/agent-settings/skills/alpha/MARKER.txt"
+
+    # 接受覆盖（pipe y）：rm -rf + cp -r，中央目录被替换，标记文件出现
+    runc add "$src" -a cursor -g
+    assert_rc "接受覆盖返回 0" 0
+    assert_contains "覆盖后提示已保存" "$OUT" "Skill 已保存到"
+    assert_present "接受覆盖：中央目录已替换（含 MARKER）" "$H/agent-settings/skills/alpha/MARKER.txt"
+}
+
 tc_link_to_copy_migration_and_field_order() {
     note "link↔copy 迁移 + skills.yaml 字段顺序 (agents_link/agents_copy/source/added_at)"
     H=$(new_home); seed_agent_dirs "$H"
@@ -358,6 +383,78 @@ tc_status_global_orphan_fix() {
     assert_contains "--fix 提示已加入配置" "$OUT" "已添加到配置"
     assert_eq "orphan 已写入 yaml" "cursor" \
         "$(yq -r '.skills.orphaned.agents_link[]' "$H/agent-settings/skills/skills.yaml")"
+}
+
+tc_status_global_wrong_target_fix() {
+    note "status -g：link WRONG_TARGET（链接指向别处）+ --fix 重指中央"
+    H=$(new_home); seed_agent_dirs "$H"
+    mk_central_skill "$H" "alpha"
+    run add alpha -a cursor -g
+    local elsewhere="$H/elsewhere"; mkdir -p "$elsewhere"
+    rm -f "$H/.cursor/skills/alpha"
+    ln -s "$elsewhere" "$H/.cursor/skills/alpha"   # 是符号链接，但指向别处
+
+    run status -g
+    assert_contains "报告 WRONG" "$OUT" "[WRONG]"
+    assert_contains "全局 wrong_target 精确文案带实际目标" "$OUT" "alpha -> cursor (链接目标错误: $elsewhere)"
+    assert_rc_nonzero "status -g 有问题返回非零"
+    run status --fix -g
+    assert_contains "--fix 提示已修复" "$OUT" "已修复"
+    assert_symlink "修复后仍为符号链接" "$H/.cursor/skills/alpha"
+    assert_eq "链接已重指中央 alpha" "$H/agent-settings/skills/alpha" "$(readlink "$H/.cursor/skills/alpha")"
+}
+
+tc_status_global_copy_wrong_type_fix() {
+    note "status -g：copy WRONG_TYPE（实际非目录）+ --fix"
+    H=$(new_home); seed_agent_dirs "$H"
+    mk_central_skill "$H" "gamma"
+    run add gamma -a codex -g -c                    # 复制模式
+    assert_real_dir "初始为复制实体目录" "$H/.codex/skills/gamma"
+    rm -rf "$H/.codex/skills/gamma"
+    printf 'x\n' > "$H/.codex/skills/gamma"         # 期望 copy，实际是文件
+
+    run status -g
+    assert_contains "报告 WRONG" "$OUT" "[WRONG]"
+    assert_contains "全局 copy wrong_type 精确文案" "$OUT" "gamma -> codex (期望 copy，实际非目录)"
+    assert_rc_nonzero "status -g 有问题返回非零"
+    run status --fix -g
+    assert_contains "--fix 提示已修复" "$OUT" "已修复"
+    assert_real_dir "已修复为复制实体目录" "$H/.codex/skills/gamma"
+    assert_present "修复确实 cp -r 了内容（含 SKILL.md，而非空目录）" "$H/.codex/skills/gamma/SKILL.md"
+}
+
+tc_status_global_copy_missing_fix() {
+    note "status -g：copy MISSING + --fix 重新复制"
+    H=$(new_home); seed_agent_dirs "$H"
+    mk_central_skill "$H" "gamma"
+    run add gamma -a codex -g -c
+    rm -rf "$H/.codex/skills/gamma"                 # 配置有，copy 没了
+
+    run status -g
+    assert_contains "报告 MISSING" "$OUT" "[MISSING]"
+    assert_contains "全局 copy MISSING 精确文案带 (配置有，copy 不存在)" "$OUT" "gamma -> codex (配置有，copy 不存在)"
+    assert_rc_nonzero "status -g 有问题返回非零"
+    run status --fix -g
+    assert_contains "--fix 提示已复制" "$OUT" "已复制"
+    assert_real_dir "copy 已重建" "$H/.codex/skills/gamma"
+    assert_present "重建确实 cp -r 了内容（含 SKILL.md，而非空目录）" "$H/.codex/skills/gamma/SKILL.md"
+}
+
+tc_status_global_copy_issue_folds() {
+    note "status -g：同 skill 的 link OK 但 copy 缺失 → 整体仍非零（钉住第二个 helper 调用的折叠语义）"
+    H=$(new_home); seed_agent_dirs "$H"
+    mk_central_skill "$H" "delta"
+    run add delta -a cursor -g                      # link 分支: cursor
+    run add delta -a codex -g -c                    # copy 分支: codex
+    assert_symlink "link 分支就绪 (cursor)" "$H/.cursor/skills/delta"
+    assert_real_dir "copy 分支就绪 (codex)" "$H/.codex/skills/delta"
+    rm -rf "$H/.codex/skills/delta"                 # 只破坏 copy 分支
+
+    run status -g
+    assert_contains "link 分支仍报告 OK" "$OUT" "[OK]"
+    assert_contains "OK 行确指向 cursor 条目（本场景仅此一处 delta -> cursor）" "$OUT" "delta -> cursor"
+    assert_contains "copy 分支报告 MISSING" "$OUT" "delta -> codex (配置有，copy 不存在)"
+    assert_rc_nonzero "copy 分支问题折叠进总退出码（link OK 不会把它清回 0）"
 }
 
 tc_project_add_default_cwd_in_home() {
@@ -863,12 +960,17 @@ tc_sync_all_exit_folds_global() {
 # ════════════════════════════ 运行 ════════════════════════════
 tc_help_and_deps
 tc_add_global_link_and_record
+tc_add_local_overwrite
 tc_link_to_copy_migration_and_field_order
 tc_add_copy_global
 tc_list_global_and_all
 tc_status_global_ok
 tc_status_global_missing_fix
 tc_status_global_wrong_fix
+tc_status_global_wrong_target_fix
+tc_status_global_copy_wrong_type_fix
+tc_status_global_copy_missing_fix
+tc_status_global_copy_issue_folds
 tc_status_global_orphan_fix
 tc_status_all_exit_folds_global
 tc_sync_all_exit_folds_global

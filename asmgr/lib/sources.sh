@@ -30,6 +30,32 @@ parse_github_url() {
     fi
 }
 
+# 把 <src> 复制进中央目录 $SKILLS_DIR/$SKILL_NAME（download/copy 共用）。
+# 目标已存在则提示覆盖；用户拒绝则保留现有、视为成功（返回 0，不重复复制）。
+# 返回 0=已就绪（已复制或保留现有），1=失败（删除或复制出错）。
+save_skill_to_central() {
+    local src="$1"
+    local target_dir="$SKILLS_DIR/$SKILL_NAME"
+    if [[ -e "$target_dir" ]]; then
+        print_warn "Skill 已存在: $target_dir"
+        if ! prompt_yes_no "是否覆盖? (y/N) " "N"; then
+            print_info "取消操作"
+            return 0
+        fi
+        if ! /bin/rm -rf "$target_dir"; then
+            print_error "删除失败: $target_dir"
+            return 1
+        fi
+    fi
+    /bin/mkdir -p "$SKILLS_DIR"
+    if ! /bin/cp -r "$src" "$target_dir"; then
+        print_error "复制失败: $src -> $target_dir"
+        return 1
+    fi
+    print_info "Skill 已保存到: $target_dir"
+    return 0
+}
+
 # 从 GitHub 下载 skill 使用 sparse checkout
 download_from_github() {
     local temp_dir=$(/usr/bin/mktemp -d)
@@ -68,30 +94,8 @@ download_from_github() {
             exit 1
         fi
 
-        # 复制到中央目录
-        local target_dir="$SKILLS_DIR/$SKILL_NAME"
-
-        # 检查目标是否已存在
-        if [[ -e "$target_dir" ]]; then
-            print_warn "Skill 已存在: $target_dir"
-            if ! prompt_yes_no "是否覆盖? (y/N) " "N"; then
-                print_info "取消操作"
-                exit 0
-            fi
-            if ! /bin/rm -rf "$target_dir"; then
-                print_error "删除失败: $target_dir"
-                exit 1
-            fi
-        fi
-
-        # 复制文件
-        /bin/mkdir -p "$SKILLS_DIR"
-        if ! /bin/cp -r "$REPO_PATH" "$target_dir"; then
-            print_error "复制失败: $REPO_PATH -> $target_dir"
-            exit 1
-        fi
-
-        print_info "Skill 已保存到: $target_dir"
+        # 复制到中央目录（已存在则提示覆盖；拒绝=保留现有，视为成功）
+        save_skill_to_central "$REPO_PATH" || exit 1
     )
 
     local exit_code=$?
@@ -203,31 +207,7 @@ copy_from_local() {
     print_info "复制 Skill: $SKILL_NAME"
     print_info "来源: $source_path"
 
-    local target_dir="$SKILLS_DIR/$SKILL_NAME"
-
-    # 检查目标是否已存在
-    if [[ -e "$target_dir" ]]; then
-        print_warn "Skill 已存在: $target_dir"
-        if ! prompt_yes_no "是否覆盖? (y/N) " "N"; then
-            print_info "取消操作"
-            return 0
-        fi
-        if ! /bin/rm -rf "$target_dir"; then
-            print_error "删除失败: $target_dir"
-            return 1
-        fi
-    fi
-
-    # 复制文件
-    /bin/mkdir -p "$SKILLS_DIR"
-    if ! /bin/cp -r "$source_path" "$target_dir"; then
-        print_error "复制失败: $source_path -> $target_dir"
-        return 1
-    fi
-
-    print_info "Skill 已保存到: $target_dir"
-
-    return 0
+    save_skill_to_central "$source_path"
 }
 
 # 安装 skill 到指定 agents（统一 link/copy 逻辑）

@@ -49,6 +49,21 @@ project_manifest_file() {
     echo "$PROJECTS_DIR/$name.yaml"
 }
 
+# 当前目录 scope 的统一派发：解析 cwd 的清单文件，存在则作为首参交给 <fn>（连同后续 args），
+# 否则打印 warn_no_manifest + hint_other_scopes。用法: run_on_cwd_manifest <fn> [args...]
+run_on_cwd_manifest() {
+    local fn="$1"; shift
+    local d m
+    d="$(/bin/pwd)"
+    m="$(project_manifest_file "$d")"
+    if [[ -f "$m" ]]; then
+        "$fn" "$m" "$@"
+    else
+        warn_no_manifest "$m"
+        hint_other_scopes
+    fi
+}
+
 # 在 $AGENTS_DIR 解析 subagent 名（目录或 .md 文件），输出实际条目名
 resolve_subagent_name() {
     local query="$1"
@@ -115,24 +130,13 @@ pm_update_entry() {
     shift 4
     local agents=("$@")
 
-    local existing_link=() existing_copy=() line
-    while IFS= read -r line; do [[ -n "$line" ]] && existing_link+=("$line"); done <<< "$(pm_get_entry_agents "$file" "$section" "$name" "agents_link")"
-    while IFS= read -r line; do [[ -n "$line" ]] && existing_copy+=("$line"); done <<< "$(pm_get_entry_agents "$file" "$section" "$name" "agents_copy")"
+    local _link_yaml _copy_yaml
+    compute_agent_arrays \
+        "$(pm_get_entry_agents "$file" "$section" "$name" "agents_link")" \
+        "$(pm_get_entry_agents "$file" "$section" "$name" "agents_copy")" \
+        "$method" "${agents[@]}"
 
-    local new_link=() new_copy=()
-    if [[ "$method" == "copy" ]]; then
-        merge_unique_agents "${existing_copy[@]}" "${agents[@]}"; new_copy=("${_merged_agents[@]}")
-        filter_out_agents "${existing_link[@]}" --remove "${agents[@]}"; new_link=("${_filtered_agents[@]}")
-    else
-        merge_unique_agents "${existing_link[@]}" "${agents[@]}"; new_link=("${_merged_agents[@]}")
-        filter_out_agents "${existing_copy[@]}" --remove "${agents[@]}"; new_copy=("${_filtered_agents[@]}")
-    fi
-
-    local link_yaml copy_yaml
-    link_yaml=$(build_yaml_array "${new_link[@]}")
-    copy_yaml=$(build_yaml_array "${new_copy[@]}")
-
-    yq -i ".${section}.\"$name\" = {\"agents_link\": $link_yaml, \"agents_copy\": $copy_yaml}" "$file"
+    yq -i ".${section}.\"$name\" = {\"agents_link\": $_link_yaml, \"agents_copy\": $_copy_yaml}" "$file"
 }
 
 pm_remove_entry_agent() {

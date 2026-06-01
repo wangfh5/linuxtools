@@ -32,6 +32,12 @@ get_skill_agents_field() {
     yq -r ".skills.\"$skill_name\".$field // [] | .[]" "$SKILLS_YAML" 2>/dev/null
 }
 
+# skills.yaml 中是否存在某 skill 记录（文件不存在即视为不存在）。
+# 全局侧与 project.sh 的 pm_entry_exists 对应。
+skill_exists_in_yaml() {
+    [[ -f "$SKILLS_YAML" ]] && yq -e ".skills.\"$1\"" "$SKILLS_YAML" &>/dev/null
+}
+
 # 从 base 中移除 remove 列表中的 agents（结果写入全局数组 _filtered_agents）
 filter_out_agents() {
     _filtered_agents=()
@@ -65,6 +71,33 @@ filter_out_agents() {
     done
 }
 
+# 把「现有 link/copy 列表 + 本次 method/agents」算成两个 yaml 数组字符串。
+# method=copy → agents 进 copy、从 link 移除；否则进 link、从 copy 移除（两字段互斥）。
+# 现有列表以换行串传入（调用方各自从 skills.yaml 或项目清单读出）。
+# 输出全局 _link_yaml / _copy_yaml（沿用本仓库 _merged_agents/_filtered_agents 式输出变量约定）。
+# 用法: compute_agent_arrays "<existing_link_lines>" "<existing_copy_lines>" <method> <agents...>
+compute_agent_arrays() {
+    local existing_link_str="$1" existing_copy_str="$2" method="$3"
+    shift 3
+    local agents=("$@")
+
+    local existing_link=() existing_copy=() line
+    while IFS= read -r line; do [[ -n "$line" ]] && existing_link+=("$line"); done <<< "$existing_link_str"
+    while IFS= read -r line; do [[ -n "$line" ]] && existing_copy+=("$line"); done <<< "$existing_copy_str"
+
+    local new_link=() new_copy=()
+    if [[ "$method" == "copy" ]]; then
+        merge_unique_agents "${existing_copy[@]}" "${agents[@]}"; new_copy=("${_merged_agents[@]}")
+        filter_out_agents "${existing_link[@]}" --remove "${agents[@]}"; new_link=("${_filtered_agents[@]}")
+    else
+        merge_unique_agents "${existing_link[@]}" "${agents[@]}"; new_link=("${_merged_agents[@]}")
+        filter_out_agents "${existing_copy[@]}" --remove "${agents[@]}"; new_copy=("${_filtered_agents[@]}")
+    fi
+
+    _link_yaml=$(build_yaml_array "${new_link[@]}")
+    _copy_yaml=$(build_yaml_array "${new_copy[@]}")
+}
+
 # 更新 skills.yaml 配置文件
 # 用法: update_skills_yaml <skill_name> <source> <touch_added_at:0|1> <method:link|copy> <agent1> [agent2] ...
 update_skills_yaml() {
@@ -84,7 +117,7 @@ update_skills_yaml() {
     local current_source=""
     local current_added_at=""
 
-    if yq -e ".skills.\"$skill_name\"" "$SKILLS_YAML" &>/dev/null; then
+    if skill_exists_in_yaml "$skill_name"; then
         exists=1
         current_source=$(yq -r ".skills.\"$skill_name\".source // \"\"" "$SKILLS_YAML" 2>/dev/null)
         current_added_at=$(yq -r ".skills.\"$skill_name\".added_at // \"\"" "$SKILLS_YAML" 2>/dev/null)
@@ -107,37 +140,14 @@ update_skills_yaml() {
         final_added_at="$timestamp"
     fi
 
-    # 读取现有 link/copy 列表
-    local existing_link=()
-    local existing_copy=()
-    local line
-    while IFS= read -r line; do
-        [[ -n "$line" ]] && existing_link+=("$line")
-    done <<< "$(get_skill_agents_link "$skill_name")"
-    while IFS= read -r line; do
-        [[ -n "$line" ]] && existing_copy+=("$line")
-    done <<< "$(get_skill_agents_field "$skill_name" "agents_copy")"
-
-    local new_link=()
-    local new_copy=()
-    if [[ "$method" == "copy" ]]; then
-        merge_unique_agents "${existing_copy[@]}" "${agents[@]}"
-        new_copy=("${_merged_agents[@]}")
-        filter_out_agents "${existing_link[@]}" --remove "${agents[@]}"
-        new_link=("${_filtered_agents[@]}")
-    else
-        merge_unique_agents "${existing_link[@]}" "${agents[@]}"
-        new_link=("${_merged_agents[@]}")
-        filter_out_agents "${existing_copy[@]}" --remove "${agents[@]}"
-        new_copy=("${_filtered_agents[@]}")
-    fi
-
-    local link_yaml copy_yaml
-    link_yaml=$(build_yaml_array "${new_link[@]}")
-    copy_yaml=$(build_yaml_array "${new_copy[@]}")
+    local _link_yaml _copy_yaml
+    compute_agent_arrays \
+        "$(get_skill_agents_link "$skill_name")" \
+        "$(get_skill_agents_field "$skill_name" "agents_copy")" \
+        "$method" "${agents[@]}"
 
     # 整块重写，保证字段顺序：agents_link、agents_copy、source、added_at
-    yq -i ".skills.\"$skill_name\" = {\"agents_link\": $link_yaml, \"agents_copy\": $copy_yaml, \"source\": \"$final_source\", \"added_at\": \"$final_added_at\"}" "$SKILLS_YAML"
+    yq -i ".skills.\"$skill_name\" = {\"agents_link\": $_link_yaml, \"agents_copy\": $_copy_yaml, \"source\": \"$final_source\", \"added_at\": \"$final_added_at\"}" "$SKILLS_YAML"
 }
 
 # 从 skills.yaml 读取 skill 的 link/copy agents 列表

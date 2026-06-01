@@ -183,10 +183,7 @@ cmd_add() {
                 shift
                 ;;
             -p|--project)
-                if [[ -z "$2" || "$2" =~ ^- ]]; then
-                    print_error "-p 参数需要指定项目目录"
-                    return 1
-                fi
+                require_project_dir_arg "$2" || return 1
                 project_dir="$2"
                 shift 2
                 ;;
@@ -316,6 +313,12 @@ cmd_add() {
     return 0
 }
 
+# 当前项目清单的列出动作（带 cwd 专属表头），供 run_on_cwd_manifest 调用
+_list_cwd_one() {
+    echo "当前项目:"; echo "========="; echo
+    project_list_one "$1"
+}
+
 # 列出命令（默认=当前目录项目；-g 全局；-p 指定项目；--all 全部）
 cmd_list() {
     local scope="cwd" project_dir=""
@@ -323,7 +326,7 @@ cmd_list() {
         case "$1" in
             -g|--global) scope="global"; shift ;;
             -p|--project)
-                if [[ -z "$2" || "$2" =~ ^- ]]; then print_error "-p 参数需要指定项目目录"; return 1; fi
+                require_project_dir_arg "$2" || return 1
                 project_dir="$2"; scope="project"; shift 2 ;;
             --all) scope="all"; shift ;;
             *) print_error "未知参数: $1"; return 1 ;;
@@ -335,14 +338,7 @@ cmd_list() {
             list_global
             ;;
         cwd)
-            local d m; d="$(/bin/pwd)"; m="$(project_manifest_file "$d")"
-            if [[ -f "$m" ]]; then
-                echo "当前项目:"; echo "========="; echo
-                project_list_one "$m"
-            else
-                warn_no_manifest "$m"
-                hint_other_scopes
-            fi
+            run_on_cwd_manifest _list_cwd_one
             ;;
         project)
             local d m; d=$(normalize_base_dir "$project_dir"); m="$(project_manifest_file "$d")"
@@ -361,6 +357,35 @@ cmd_list() {
             ;;
     esac
     return 0
+}
+
+# 打印一个 skill 在某组 agents 下的安装状态行（list 用）。
+# 宽松判定：link 只问「目标是不是符号链接」（指向何处由 status 负责），copy 问「是否实体目录」。
+# 用法: _list_agents_status <skill_name> <method:link|copy> <agents_lines>
+_list_agents_status() {
+    local skill_name="$1" method="$2" agents="$3"
+    local src="$SKILLS_DIR/$skill_name"
+    local agent agent_dir link_path cls state actual
+    while IFS= read -r agent; do
+        [[ -z "$agent" ]] && continue
+        agent_dir=$(get_agent_dir "$agent" "$HOME" 2>/dev/null)
+        link_path="$agent_dir/$skill_name"
+        cls=$(mat_classify "$link_path" "$src" "$method")
+        IFS=$'\t' read -r state actual <<< "$cls"
+        if [[ "$method" == "link" ]]; then
+            case "$state" in
+                ok|wrong_target) echo -e "        ${GREEN}✓${NC} $agent (symlink)" ;;
+                wrong_type)      echo -e "        ${RED}✗${NC} $agent (实际非 symlink)" ;;
+                *)               echo -e "        ${RED}✗${NC} $agent (缺失)" ;;
+            esac
+        else
+            case "$state" in
+                ok)         echo -e "        ${GREEN}✓${NC} $agent (copy)" ;;
+                wrong_type) echo -e "        ${RED}✗${NC} $agent (实际非 copy)" ;;
+                *)          echo -e "        ${RED}✗${NC} $agent (缺失)" ;;
+            esac
+        fi
+    done <<< "$agents"
 }
 
 # 列出所有全局 skills 及其安装状态
@@ -404,38 +429,14 @@ list_global() {
 
             echo "      链接 (link):"
             if [[ -n "$link_agents" ]]; then
-                while IFS= read -r agent; do
-                    [[ -z "$agent" ]] && continue
-                    local agent_dir
-                    agent_dir=$(get_agent_dir "$agent" "$HOME" 2>/dev/null)
-                    local link_path="$agent_dir/$skill_name"
-                    if [[ -L "$link_path" ]]; then
-                        echo -e "        ${GREEN}✓${NC} $agent (symlink)"
-                    elif [[ -e "$link_path" ]]; then
-                        echo -e "        ${RED}✗${NC} $agent (实际非 symlink)"
-                    else
-                        echo -e "        ${RED}✗${NC} $agent (缺失)"
-                    fi
-                done <<< "$link_agents"
+                _list_agents_status "$skill_name" "link" "$link_agents"
             else
                 echo "        (无)"
             fi
 
             echo "      复制 (copy):"
             if [[ -n "$copy_agents" ]]; then
-                while IFS= read -r agent; do
-                    [[ -z "$agent" ]] && continue
-                    local agent_dir
-                    agent_dir=$(get_agent_dir "$agent" "$HOME" 2>/dev/null)
-                    local link_path="$agent_dir/$skill_name"
-                    if [[ -d "$link_path" && ! -L "$link_path" ]]; then
-                        echo -e "        ${GREEN}✓${NC} $agent (copy)"
-                    elif [[ -e "$link_path" ]]; then
-                        echo -e "        ${RED}✗${NC} $agent (实际非 copy)"
-                    else
-                        echo -e "        ${RED}✗${NC} $agent (缺失)"
-                    fi
-                done <<< "$copy_agents"
+                _list_agents_status "$skill_name" "copy" "$copy_agents"
             else
                 echo "        (无)"
             fi
@@ -447,6 +448,63 @@ list_global() {
 }
 
 # 检查配置与实际全局链接/复制的一致性
+# 检查某 skill 在一组 agents 下、某 method（link|copy）的全局安装一致性（返回 0=全 OK, 1=有问题）。
+# 全局侧的逐条检查器，对应 project.sh 的 _status_check_entry（消息/缩进/修复命令各自独立）。
+_status_check_global_entry() {
+    local skill_name="$1" skill_source="$2" method="$3" agents="$4" fix_mode="$5"
+    local issue=0 agent agent_dir link_path cls state actual
+    while IFS= read -r agent; do
+        [[ -z "$agent" ]] && continue
+        agent_dir=$(get_agent_dir "$agent" "$HOME" 2>/dev/null)
+        [[ -z "$agent_dir" ]] && continue
+        link_path="$agent_dir/$skill_name"
+        cls=$(mat_classify "$link_path" "$skill_source" "$method")
+        IFS=$'\t' read -r state actual <<< "$cls"
+        if [[ "$method" == "link" ]]; then
+            case "$state" in
+                ok)
+                    print_status_tag OK "$skill_name -> $agent" ;;
+                wrong_target)
+                    print_status_tag WRONG "$skill_name -> $agent (链接目标错误: $actual)"
+                    issue=1
+                    if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
+                        if /bin/rm "$link_path" && /bin/ln -sf "$skill_source" "$link_path"; then echo "  已修复"; else print_error "修复失败: $link_path"; fi
+                    elif [[ $fix_mode -eq 1 ]]; then echo "  无法修复: 源或目标目录不存在"; fi ;;
+                wrong_type)
+                    print_status_tag WRONG "$skill_name -> $agent (期望链接，实际为目录/文件)"
+                    issue=1
+                    if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
+                        if /bin/rm -rf "$link_path" && /bin/ln -sf "$skill_source" "$link_path"; then echo "  已修复"; else print_error "修复失败: $link_path"; fi
+                    elif [[ $fix_mode -eq 1 ]]; then echo "  无法修复: 源或目标目录不存在"; fi ;;
+                missing)
+                    print_status_tag MISSING "$skill_name -> $agent (配置有，链接不存在)"
+                    issue=1
+                    if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
+                        if /bin/ln -sf "$skill_source" "$link_path"; then echo "  已创建链接"; else print_error "创建链接失败: $link_path"; fi
+                    elif [[ $fix_mode -eq 1 ]]; then echo "  无法修复: 源或目标目录不存在"; fi ;;
+            esac
+        else
+            case "$state" in
+                ok)
+                    print_status_tag OK "$skill_name -> $agent (copy)" ;;
+                wrong_type)
+                    print_status_tag WRONG "$skill_name -> $agent (期望 copy，实际非目录)"
+                    issue=1
+                    if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
+                        if /bin/rm -rf "$link_path" && /bin/cp -r "$skill_source" "$link_path"; then echo "  已修复"; else print_error "修复失败: $link_path"; fi
+                    elif [[ $fix_mode -eq 1 ]]; then echo "  无法修复: 源或目标目录不存在"; fi ;;
+                missing)
+                    print_status_tag MISSING "$skill_name -> $agent (配置有，copy 不存在)"
+                    issue=1
+                    if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
+                        if /bin/cp -r "$skill_source" "$link_path"; then echo "  已复制"; else print_error "复制失败: $skill_source -> $link_path"; fi
+                    elif [[ $fix_mode -eq 1 ]]; then echo "  无法修复: 源或目标目录不存在"; fi ;;
+            esac
+        fi
+    done <<< "$agents"
+    return $issue
+}
+
 # 检查单个 skill 的所有已配置安装（link + copy agents）
 # 返回 0=全部一致, 1=有不一致
 status_check_configured_skill() {
@@ -463,69 +521,8 @@ status_check_configured_skill() {
         return 0
     fi
 
-    while IFS= read -r agent; do
-        [[ -z "$agent" ]] && continue
-
-        local agent_dir
-        agent_dir=$(get_agent_dir "$agent" "$HOME" 2>/dev/null)
-        [[ -z "$agent_dir" ]] && continue
-
-        local link_path="$agent_dir/$skill_name"
-        local cls state actual
-        cls=$(mat_classify "$link_path" "$skill_source" "link")
-        IFS=$'\t' read -r state actual <<< "$cls"
-        case "$state" in
-            ok)
-                print_status_tag OK "$skill_name -> $agent" ;;
-            wrong_target)
-                print_status_tag WRONG "$skill_name -> $agent (链接目标错误: $actual)"
-                found_issue=1
-                if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
-                    if /bin/rm "$link_path" && /bin/ln -sf "$skill_source" "$link_path"; then echo "  已修复"; else print_error "修复失败: $link_path"; fi
-                elif [[ $fix_mode -eq 1 ]]; then echo "  无法修复: 源或目标目录不存在"; fi ;;
-            wrong_type)
-                print_status_tag WRONG "$skill_name -> $agent (期望链接，实际为目录/文件)"
-                found_issue=1
-                if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
-                    if /bin/rm -rf "$link_path" && /bin/ln -sf "$skill_source" "$link_path"; then echo "  已修复"; else print_error "修复失败: $link_path"; fi
-                elif [[ $fix_mode -eq 1 ]]; then echo "  无法修复: 源或目标目录不存在"; fi ;;
-            missing)
-                print_status_tag MISSING "$skill_name -> $agent (配置有，链接不存在)"
-                found_issue=1
-                if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
-                    if /bin/ln -sf "$skill_source" "$link_path"; then echo "  已创建链接"; else print_error "创建链接失败: $link_path"; fi
-                elif [[ $fix_mode -eq 1 ]]; then echo "  无法修复: 源或目标目录不存在"; fi ;;
-        esac
-    done <<< "$link_agents"
-
-    while IFS= read -r agent; do
-        [[ -z "$agent" ]] && continue
-
-        local agent_dir
-        agent_dir=$(get_agent_dir "$agent" "$HOME" 2>/dev/null)
-        [[ -z "$agent_dir" ]] && continue
-
-        local link_path="$agent_dir/$skill_name"
-        local cls state actual
-        cls=$(mat_classify "$link_path" "$skill_source" "copy")
-        IFS=$'\t' read -r state actual <<< "$cls"
-        case "$state" in
-            ok)
-                print_status_tag OK "$skill_name -> $agent (copy)" ;;
-            wrong_type)
-                print_status_tag WRONG "$skill_name -> $agent (期望 copy，实际非目录)"
-                found_issue=1
-                if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
-                    if /bin/rm -rf "$link_path" && /bin/cp -r "$skill_source" "$link_path"; then echo "  已修复"; else print_error "修复失败: $link_path"; fi
-                elif [[ $fix_mode -eq 1 ]]; then echo "  无法修复: 源或目标目录不存在"; fi ;;
-            missing)
-                print_status_tag MISSING "$skill_name -> $agent (配置有，copy 不存在)"
-                found_issue=1
-                if [[ $fix_mode -eq 1 && -d "$skill_source" && -d "$agent_dir" ]]; then
-                    if /bin/cp -r "$skill_source" "$link_path"; then echo "  已复制"; else print_error "复制失败: $skill_source -> $link_path"; fi
-                elif [[ $fix_mode -eq 1 ]]; then echo "  无法修复: 源或目标目录不存在"; fi ;;
-        esac
-    done <<< "$copy_agents"
+    _status_check_global_entry "$skill_name" "$skill_source" "link" "$link_agents" "$fix_mode" || found_issue=1
+    _status_check_global_entry "$skill_name" "$skill_source" "copy" "$copy_agents" "$fix_mode" || found_issue=1
 
     return $found_issue
 }
@@ -550,7 +547,7 @@ status_scan_orphans() {
             [[ -z "$method" ]] && continue
 
             local in_config=0
-            if [[ -f "$SKILLS_YAML" ]] && yq -e ".skills.\"$skill_name\"" "$SKILLS_YAML" &>/dev/null; then
+            if skill_exists_in_yaml "$skill_name"; then
                 local field
                 field=$(agents_field_for_method "$method")
                 local listed_agents=()
@@ -586,7 +583,7 @@ cmd_status() {
             --fix) fix_mode=1; shift ;;
             -g|--global) scope="global"; shift ;;
             -p|--project)
-                if [[ -z "$2" || "$2" =~ ^- ]]; then print_error "-p 参数需要指定项目目录"; return 1; fi
+                require_project_dir_arg "$2" || return 1
                 project_dir="$2"; scope="project"; shift 2 ;;
             --all) scope="all"; shift ;;
             *) print_error "未知参数: $1"; return 1 ;;
@@ -598,13 +595,7 @@ cmd_status() {
             status_global "$fix_mode"
             ;;
         cwd)
-            local d m; d="$(/bin/pwd)"; m="$(project_manifest_file "$d")"
-            if [[ -f "$m" ]]; then
-                project_status_one "$m" "$fix_mode"
-            else
-                warn_no_manifest "$m"
-                hint_other_scopes
-            fi
+            run_on_cwd_manifest project_status_one "$fix_mode"
             ;;
         project)
             local d m; d=$(normalize_base_dir "$project_dir"); m="$(project_manifest_file "$d")"
@@ -668,7 +659,7 @@ cmd_sync() {
             --from-config) mode="from-config"; shift ;;
             -g|--global) scope="global"; shift ;;
             -p|--project)
-                if [[ -z "$2" || "$2" =~ ^- ]]; then print_error "-p 参数需要指定项目目录"; return 1; fi
+                require_project_dir_arg "$2" || return 1
                 project_dir="$2"; scope="project"; shift 2 ;;
             --all) scope="all"; shift ;;
             *)
@@ -698,13 +689,7 @@ cmd_sync() {
             global) sync_from_config ;;
             project) local d; d=$(normalize_base_dir "$project_dir"); project_deploy_one "$(project_manifest_file "$d")" ;;
             cwd)
-                local d m; d="$(/bin/pwd)"; m="$(project_manifest_file "$d")"
-                if [[ -f "$m" ]]; then
-                    project_deploy_one "$m"
-                else
-                    warn_no_manifest "$m"
-                    hint_other_scopes
-                fi
+                run_on_cwd_manifest project_deploy_one
                 ;;
             all)
                 local grc prc
@@ -792,44 +777,12 @@ sync_from_config() {
             continue
         fi
 
-        local link_agents
+        local link_agents copy_agents
         link_agents=$(get_skill_agents_link "$skill_name")
-        local copy_agents
         copy_agents=$(get_skill_agents_copy "$skill_name")
 
-        local agent_dir
-
-        while IFS= read -r agent; do
-            [[ -z "$agent" ]] && continue
-            agent_dir=$(get_agent_dir "$agent" "$HOME" 2>/dev/null)
-            if [[ -z "$agent_dir" ]]; then
-                print_warn "不支持的 Agent: $agent"
-                continue
-            fi
-
-            if [[ ! -d "$agent_dir" ]]; then
-                print_info "创建 agent 目录: $agent_dir"
-                /bin/mkdir -p "$agent_dir"
-            fi
-
-            mat_deploy_link "$skill_source" "$agent_dir" "$skill_name" "$agent"
-        done <<< "$link_agents"
-
-        while IFS= read -r agent; do
-            [[ -z "$agent" ]] && continue
-            agent_dir=$(get_agent_dir "$agent" "$HOME" 2>/dev/null)
-            if [[ -z "$agent_dir" ]]; then
-                print_warn "不支持的 Agent: $agent"
-                continue
-            fi
-
-            if [[ ! -d "$agent_dir" ]]; then
-                print_info "创建 agent 目录: $agent_dir"
-                /bin/mkdir -p "$agent_dir"
-            fi
-
-            mat_deploy_copy "$skill_source" "$agent_dir" "$skill_name" "$agent"
-        done <<< "$copy_agents"
+        # 全局 scope = 以 $HOME 为 base，复用项目侧的逐 agent 物化逻辑
+        _project_deploy_skill "$HOME" "$skill_name" "$skill_source" "$link_agents" "$copy_agents"
     done <<< "$skills"
 
     info_done "同步"
@@ -854,7 +807,7 @@ remove_skill_completely() {
     local skill_dir="$SKILLS_DIR/$skill_name"
 
     local has_record=0
-    if [[ -f "$SKILLS_YAML" ]] && yq -e ".skills.\"$skill_name\"" "$SKILLS_YAML" &>/dev/null; then
+    if skill_exists_in_yaml "$skill_name"; then
         has_record=1
     fi
     if [[ ! -d "$skill_dir" ]] && [[ $has_record -eq 0 ]]; then
@@ -952,7 +905,7 @@ remove_skill_from_agents() {
         fi
 
         if [[ "$mode" == "global" && -f "$SKILLS_YAML" ]]; then
-            if yq -e ".skills.\"$skill_name\"" "$SKILLS_YAML" &>/dev/null; then
+            if skill_exists_in_yaml "$skill_name"; then
                 local field
                 field=$(agents_field_for_method "$actual_method")
                 remove_agent_from_skill_field "$skill_name" "$field" "$agent"
@@ -1013,10 +966,7 @@ cmd_remove() {
                 shift
                 ;;
             -p|--project)
-                if [[ -z "$2" || "$2" =~ ^- ]]; then
-                    print_error "-p 参数需要指定项目目录"
-                    return 1
-                fi
+                require_project_dir_arg "$2" || return 1
                 project_dir="$2"
                 shift 2
                 ;;

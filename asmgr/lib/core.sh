@@ -162,6 +162,16 @@ resolve_base_dir() {
     return 0
 }
 
+# 校验 -p/--project 的实参：必须存在且不是另一个选项（不以 - 开头）。缺失则报错返回 1。
+# 用法: require_project_dir_arg "$2" || return 1
+require_project_dir_arg() {
+    if [[ -z "$1" || "$1" =~ ^- ]]; then
+        print_error "-p 参数需要指定项目目录"
+        return 1
+    fi
+    return 0
+}
+
 # 支持的 agents 列表
 SUPPORTED_AGENTS="cursor claude-code codex gemini"
 
