@@ -25,9 +25,6 @@ echo "  ✓ sync-remote -> $SCRIPT_DIR/sync/sync_to_remote.sh"
 
 ln -sf "$SCRIPT_DIR/asmgr/asmgr.sh" "$BIN_DIR/asmgr"
 echo "  ✓ asmgr -> $SCRIPT_DIR/asmgr/asmgr.sh"
-# 兼容别名：原名 skill-mgr 仍可用
-ln -sf "$SCRIPT_DIR/asmgr/asmgr.sh" "$BIN_DIR/skill-mgr"
-echo "  ✓ skill-mgr (兼容别名) -> $SCRIPT_DIR/asmgr/asmgr.sh"
 
 # 3. 检查并配置 PATH
 echo "[3/3] 检查 PATH 配置..."

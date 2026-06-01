@@ -18,7 +18,7 @@ sync-remote -m pull      # 从远程拉取
 
 ### [asmgr](./asmgr/)
 `~/agent-settings` 中央配置仓库的命令行管家：统一管理 skills、subagents、项目局域清单与
-Claude Code plugin/marketplace（原名 skill-mgr，`skill-mgr` 命令仍作为兼容别名可用）。
+Claude Code plugin/marketplace。
 
 **核心特性**：中央存储 + 符号链接，跨 cursor/claude-code/codex/gemini，统一 scope 模型。
 

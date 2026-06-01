@@ -1,31 +1,18 @@
 # asmgr
 
-**asmgr** — `~/agent-settings` 中央配置仓库的命令行管家：统一管理 skills、subagents、项目局域清单与
-Claude Code plugin/marketplace，横跨 cursor / claude-code / codex / gemini，一套 scope 模型
+**asmgr (agent-setting manager)** — `~/agent-settings` 中央配置仓库的命令行管家：统一管理 skills、subagents、
+项目局域清单与 Claude Code plugin/marketplace，横跨 cursor / claude-code / codex / gemini，一套 scope 模型
 （默认当前目录 / `-g` 全局 / `-p` 项目 / `--all`）。
 
-> 原名 **skill-mgr**；目录与入口脚本已更名为 `asmgr`，但 `~/bin/skill-mgr` 仍作为兼容别名指向同一脚本，
-> 旧命令与文档示例继续可用。新机器安装可一并建 `ln -sf $(pwd)/asmgr/asmgr.sh ~/bin/skill-mgr`。
-
-## 功能特性
-
-- **GitHub 集成**: 使用 git sparse-checkout 高效下载远程 skills
-- **本地导入**: 支持从本地路径复制 skills
-- **符号链接管理**: 自动创建符号链接到指定 agents
-- **复制模式**: 支持复制整个目录（适用于不支持符号链接的 agents）
-- **本地/全局安装**: 支持项目级（本地）和系统级（全局）安装模式
-- **配置文件**: 使用 `skills.yaml` 记录全局安装到各 agents 的状态（link/copy）
-- **一致性检查**: 检测配置与实际符号链接的差异并自动修复
-- **双向同步**: 支持从全局符号链接/复制目录重建配置，或从配置部署全局链接
-- **Claude Code plugin/marketplace 同步**（仅 claude-code）：声明式记录到 `skills.yaml`，新电脑一键恢复
+核心思路：所有 skill 实体只存一份在中央目录 `~/agent-settings/skills/`，各 agent 目录通过**符号链接**
+（或在不支持链接时**复制**）指过去；安装状态声明式记录在 yaml 里，换机器一键恢复。
 
 ## 安装
 
 ```bash
-# 克隆或更新 linuxtools 仓库
-cd ~/Projects/linuxtools
+cd ~/path/to/linuxtools
 
-# 创建符号链接到 ~/bin
+# 符号链接到 ~/bin
 mkdir -p ~/bin
 ln -sf $(pwd)/asmgr/asmgr.sh ~/bin/asmgr
 
@@ -33,83 +20,83 @@ ln -sf $(pwd)/asmgr/asmgr.sh ~/bin/asmgr
 echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 
-# 必须安装 yq（YAML 处理工具）
-brew install yq
+# 必须安装 yq 和 jq（asmgr 启动时强制检查，缺任一则拒绝运行）
+brew install yq jq
 ```
+
+## 核心概念
+
+### 中央存储目录
+
+所有受管实体集中存放在 `~/agent-settings/`，随该仓库一起 git 同步：
+
+```
+~/agent-settings/
+├── skills/                 # 所有 skill 实体（单一真相来源）
+│   ├── skills.yaml         #   全局安装注册表
+│   ├── skill-creator/
+│   └── ...
+├── agents/                 # 所有 subagent 实体（目录或 .md）
+└── projects/               # 项目局域清单，每项目一个 <name>.yaml
+```
+
+各 agent 目录里只放指向中央目录的链接/副本（符号链接模式下“更新一处，处处生效”；复制模式需重新安装才同步）。
+
+### scope 模型（所有命令通用）
+
+scope 决定操作落在哪里、状态记到哪个文件：
+
+| scope | flag | 操作目标 | 记录到 |
+|-------|------|----------|--------|
+| 当前目录项目 | 默认（无 flag） | `./.{agent}/skills/` | `~/agent-settings/projects/<name>.yaml` |
+| 全局 | `-g` | `~/.{agent}/skills/` | `~/agent-settings/skills/skills.yaml` |
+| 指定项目 | `-p <dir>` | `<dir>/.{agent}/skills/` | `~/agent-settings/projects/<name>.yaml` |
+| 全部 | `--all` | 全局 + 所有已登记项目 | 二者 |
+
+`--all` 仅 `list` / `status` / `sync --from-config` 支持。
+
+**全局与项目记录互不相干**：`skills.yaml` 只记全局安装（`-g`），项目安装写各自的清单文件。
+
+### agent 目录映射
+
+无论全局还是项目，都用相同的目录结构，agent 才能识别加载：
+
+| Agent | 全局（`-g`） | 项目（默认 / `-p`） |
+|-------|------|------|
+| cursor | `~/.cursor/skills/` | `<project>/.cursor/skills/` |
+| claude-code | `~/.claude/skills/` | `<project>/.claude/skills/` |
+| codex | `~/.codex/skills/` | `<project>/.codex/skills/` |
+| gemini | `~/.gemini/skills/` | `<project>/.gemini/skills/` |
+
+subagent（`-s`）固定走 claude-code，链接到 `.claude/agents/`（全局为 `~/.claude/agents/`）。
+
+### 链接 vs 复制
+
+默认创建符号链接；`-c` 改为复制整个目录，用于不支持符号链接的 agent。
+
+```bash
+asmgr add ./my-skill -a cursor -g        # 符号链接：~/.cursor/skills/my-skill -> 中央目录
+asmgr add ./my-skill -a codex  -g -c     # 复制：~/.codex/skills/my-skill（实体目录）
+```
+
+复制模式占更多磁盘，且更新中央目录后需重新安装才能同步；符号链接模式则自动同步。删除复制目录时会要求确认。
 
 ## 命令概览
 
 | 命令 | 功能 |
 |------|------|
-| `asmgr add <source> [-a <agents>] [-g\|-p <dir>] [-c]` | 添加 skill 到中央目录并可选链接到 agents |
-| `asmgr list` | 列出所有已注册的 skills 及其安装状态 |
-| `asmgr status [--fix]` | 检查配置与符号链接的一致性 |
-| `asmgr sync --from-agents` | 从现有 agents 安装状态（link/copy）重建配置文件 |
-| `asmgr sync --from-config` | 从配置文件创建符号链接（用于新电脑部署） |
-| `asmgr remove <skill> [-a <agents>] [-g\|-p <dir>]` | 移除 skill（完全移除或从指定位置移除） |
+| `asmgr add <source> [-a <agents>] [-s] [-g\|-p <dir>] [-c]` | 添加 skill 到中央目录并链接；`-s` 把已有 subagent 链接到 `.claude/agents` |
+| `asmgr list [-g\|-p <dir>\|--all]` | 列出 skills / 项目清单及安装状态 |
+| `asmgr status [--fix] [-g\|-p <dir>\|--all]` | 检查配置与实际链接的一致性（`--fix` 自动修复） |
+| `asmgr sync --from-agents [-g\|-p <dir>]` | 从现有安装（link/copy）反向重建配置 |
+| `asmgr sync --from-config [-g\|-p <dir>\|--all]` | 从配置正向重建链接（新机器部署） |
+| `asmgr remove <skill> [-a <agents>] [-s] [-g\|-p <dir>]` | 移除 skill/subagent（完全移除或从指定 scope 移除） |
 
-Claude Code 的 plugin / marketplace 由官方 `claude plugin` CLI 管理；asmgr 只在 `sync` 里读写 `skills.yaml` 的 `claude_code` 段，不提供安装/卸载包装。详见下文。
+完整参数与示例见 `asmgr --help`。
 
 ## 使用方法
 
-### 安装模式
-
-asmgr 支持两种安装模式：
-
-#### 本地安装（默认）
-
-- 安装到项目目录的 agent 目录：`./.cursor/skills/`, `./.claude/skills/`, `./.codex/skills/`, `./.gemini/skills/`
-- 项目特定，与项目代码一起管理
-- 适合项目专用的 skills
-- 可以通过 `-p` 参数指定项目根目录
-
-```bash
-# 安装到当前目录（默认）
-asmgr add ./my-skill -a cursor
-# 创建 ./.cursor/skills/my-skill
-
-# 安装到指定项目目录
-asmgr add ./my-skill -a cursor -p ~/projects/foo
-# 创建 ~/projects/foo/.cursor/skills/my-skill
-```
-
-#### 全局安装（`-g` 参数）
-
-- 安装到家目录的 agent 目录：`~/.cursor/skills/`, `~/.claude/skills/`, `~/.codex/skills/`, `~/.gemini/skills/`
-- 系统范围可用，所有项目共享
-- 适合通用的、常用的 skills
-
-```bash
-# 全局安装
-asmgr add ./my-skill -a cursor -g
-# 创建 ~/.cursor/skills/my-skill
-```
-
-**目录结构一致性**：无论全局还是本地，都使用相同的目录结构（`.cursor/skills/`, `.claude/skills/`, `.codex/skills/`, `.gemini/skills/`），这样 agents 可以识别并加载 skills。
-
-**注意**：`skills.yaml` 仅记录全局安装（`-g`）到各 agents 的状态，本地安装不会写入配置。
-
-### 复制模式 (`-c`)
-
-某些 AI Agent 不支持符号链接，可以使用 `-c` 参数启用复制模式：
-
-```bash
-# 符号链接模式（默认）
-asmgr add ./my-skill -a cursor -g
-# 创建符号链接: ~/.cursor/skills/my-skill -> ~/agent-settings/skills/my-skill
-
-# 复制模式
-asmgr add ./my-skill -a codex -g -c
-# 复制目录到: ~/.codex/skills/my-skill
-```
-
-**注意事项：**
-- 复制模式会占用更多磁盘空间（每个安装位置都有完整副本）
-- 更新 skill 后需要重新安装才能同步到复制的位置
-- 符号链接模式下，更新中央目录会自动同步到所有链接位置
-- 删除复制的目录时会要求确认
-
-### add - 添加 Skill
+### add — 添加 skill
 
 ```bash
 asmgr add <source> [-a <agents...>] [-g|-p <dir>] [-c]
@@ -120,73 +107,78 @@ asmgr add <source> [-a <agents...>] [-g|-p <dir>] [-c]
 | 格式 | 示例 | 说明 |
 |------|------|------|
 | GitHub URL | `https://github.com/anthropics/skills/tree/main/skills/skill-creator` | 从 GitHub 下载 |
-| 本地路径 | `/path/to/skill`, `./skill`, `../skill` | 从本地复制（必须以 `/`, `./`, `../` 开头） |
-| Skill 名称 | `skill-creator`, `creator` | 搜索中央目录（支持模糊匹配） |
+| 本地路径 | `/path/to/skill`、`./skill`、`../skill` | 从本地复制（必须以 `/`、`./`、`../` 开头） |
+| Skill 名称 | `skill-creator`、`creator` | 搜索中央目录（支持模糊匹配） |
 
-**agents 支持：** `cursor`, `claude-code`, `codex`, `gemini`
-
-**安装模式参数：**
-
-| 参数 | 说明 |
-|------|------|
-| `-a <agents...>` | 指定要安装的 agents |
-| `-g, --global` | 全局安装（安装到家目录） |
-| `-p, --project <dir>` | 指定项目根目录（本地安装），默认为当前目录 |
-| `-c, --copy` | 复制模式（复制目录而非符号链接） |
-| 无参数 | 默认为本地安装（当前目录） |
-
-**示例：**
+**scope 由 flag 决定**（见上文 scope 模型）：
 
 ```bash
-# 本地安装（默认）- 安装到当前目录
+# 当前目录项目（默认）
 asmgr add ./my-skill -a cursor
-# 创建 ./.cursor/skills/my-skill (符号链接)
-
-# 全局安装 - 安装到家目录
+# 全局
 asmgr add ./my-skill -a cursor -g
-# 创建 ~/.cursor/skills/my-skill (符号链接)
-
-# 复制模式安装（适用于不支持符号链接的 agent）
-asmgr add ./my-skill -a codex -g -c
-# 复制到 ~/.codex/skills/my-skill (实际目录)
-
-# 混合使用：cursor 用符号链接，codex 用复制
-asmgr add ./my-skill -a cursor -g        # symlink
-asmgr add ./my-skill -a codex -g -c      # copy
-
-# 本地安装到指定项目
+# 指定项目
 asmgr add ./my-skill -a cursor -p ~/projects/foo
-# 创建 ~/projects/foo/.cursor/skills/my-skill
-
-# 多个 agents（全局安装）
-asmgr add skill-creator -a cursor claude-code -g
-
-# 从 GitHub 添加（本地安装）
-asmgr add https://github.com/anthropics/skills/tree/main/skills/skill-creator -a cursor
-
-# 从 GitHub 添加（全局安装）
-asmgr add https://github.com/anthropics/skills/tree/main/skills/pdf-editor -a cursor claude-code codex -g
-
-# 从本地路径添加（全局）
-asmgr add /path/to/my-skill -a cursor -g
-
-# 使用 skill 名称（搜索中央目录）
-asmgr add skill-creator -a claude-code
-asmgr add creator -a cursor    # 模糊搜索
+# 多 agents / 从 GitHub 添加（全局）
+asmgr add https://github.com/anthropics/skills/tree/main/skills/skill-creator -a cursor claude-code -g
 ```
 
 说明：
-- 不传 `-a` 时只会下载到中央目录，不会写入 `skills.yaml`。
-- `skills.yaml` 只记录全局安装到各 agents 的信息（link/copy）。
-- `-g` 和 `-p` 参数不能同时使用。
+- 不传 `-a` 时只下载/复制到中央目录，不写任何配置。
+- `-g` 与 `-p` 不能同时使用。
 
-### list - 列出 Skills
+### 项目局域 skill / subagent 工作流
+
+把某些 skill/subagent 绑定到具体项目，而不是装到全局。登记信息写进
+`~/agent-settings/projects/<name>.yaml`（文件名由项目路径派生，随 agent-settings git 同步），
+换机器后一键恢复。
 
 ```bash
+cd ~/Projects/foo
+
+# 在当前项目登记 skill（默认 scope=当前目录，写入项目清单）
+asmgr add paper-writing-mentor -a claude-code codex
+
+# 登记 subagent：把中央 agents/ 下的条目链到 .claude/agents
+#   -s 固定走 claude-code、忽略 -a；写入清单的 subagents 段
+asmgr add paper-writing-mentor -s
+
+# 已有链接但还没清单？反向扫描当前目录生成清单
+asmgr sync --from-agents
+
+# 查看 / 检查当前项目
 asmgr list
+asmgr status --fix
+
+# 移除项目里的某 skill / subagent
+asmgr remove paper-writing-mentor -a claude-code codex
+asmgr remove paper-writing-mentor -s
 ```
 
-显示所有已注册的 skills 及其全局安装状态（link/copy）：
+subagent 说明：
+- `-s` 只链接**已存在**于中央 `agents/` 的条目（目录或 `.md`），不会像 skill 那样下载/复制到中央目录。
+- 项目 scope 会写入清单 `subagents` 段，可被 `sync --from-config` 恢复；但**全局 `-g -s` 不写配置记录**，
+  故不在跨机恢复范围内（属每台机器装一次的本地动作）。
+
+**跨机器恢复（局域）**：在新机器 `git pull` agent-settings 后，`cd` 到登记时所在的项目目录，只恢复这个项目、不碰其它：
+
+```bash
+cd ~/Projects/foo
+asmgr sync --from-config        # 默认 scope=当前目录，按清单重建本项目的链接（含项目 subagent）
+asmgr status                    # 顺手检查链接是否齐了
+```
+
+`--from-config` 不带 scope 时只认当前目录的项目清单。
+
+### list — 列出
+
+```bash
+asmgr list          # 当前目录项目
+asmgr list -g       # 全局
+asmgr list --all    # 全局 + 所有项目
+```
+
+全局列表示例：
 
 ```
 已注册的 Skills:
@@ -202,151 +194,109 @@ asmgr list
   code-simplifier
     来源: local:/Users/me/my-skills/code-simplifier
     全局安装:
-      链接 (link):
-        ✓ cursor (symlink)
       复制 (copy):
         ✓ codex (copy)
 ```
 
-### status - 检查一致性
+### status — 检查一致性
 
 ```bash
-asmgr status         # 仅检查
-asmgr status --fix   # 检查并自动修复
+asmgr status          # 仅检查（当前项目）
+asmgr status --fix    # 检查并自动修复
+asmgr status -g       # 检查全局
 ```
 
-检测四种状态（仅全局安装记录）：
-- **OK**: 配置有、符号链接/复制目录存在
-- **MISSING**: 配置有、符号链接/复制目录不存在
-- **ORPHAN**: 配置无、符号链接/复制目录存在
+检测四种状态：
+- **OK**: 配置有、链接/副本存在且正确
+- **MISSING**: 配置有、链接/副本不存在
+- **ORPHAN**: 配置无、却存在指向中央目录的链接/副本
 - **WRONG**: 安装方式不符或链接目标错误
 
-### Smoke Test - 快速回归
-
-项目内置了一键 smoke test 脚本，使用临时 `HOME` 和临时 skill 名称，不会污染真实配置，并自动处理确认提示：
+### sync — 双向同步
 
 ```bash
-asmgr/smoke_test.sh
-```
+# 反向：从现有安装状态重建配置（首次使用或迁移）
+asmgr sync --from-agents [-g]
 
-### sync - 同步配置
-
-```bash
-# 从全局符号链接/复制目录重建配置（首次使用或迁移）
-asmgr sync --from-agents
-
-# 从配置创建全局符号链接/复制目录（新电脑部署）
-asmgr sync --from-config
+# 正向：从配置创建链接/副本（新机器部署）
+asmgr sync --from-config [-g | --all]
 ```
 
 **使用场景：**
+1. **首次使用**：已有安装但没有配置，`sync --from-agents` 扫描并生成配置。
+2. **新机器部署**：clone agent-settings 后，`sync --from-config --all` 自动重建全局 + 所有项目的链接/副本。
 
-1. **首次使用**: 已有全局安装但没有配置文件，运行 `sync --from-agents` 生成配置
-2. **新电脑部署**: clone agent-settings 仓库后，运行 `sync --from-config` 自动创建全局链接/复制目录
+### remove — 移除
 
-### remove - 移除 Skill
+**完全移除**（删除中央目录 + 所有全局安装 + `skills.yaml` 记录，执行前确认）：
 
-#### 完全移除（删除中央目录 + 全局安装 + 配置记录）
-
-```bash
-asmgr remove <skill>
-```
-
-完全移除 skill，包括：
-- 删除中央目录 `~/agent-settings/skills/<skill>`
-- 删除所有全局安装（link/copy）
-- 从 `skills.yaml` 移除记录
-
-说明：
-- 本地安装不记录在 `skills.yaml`，如需删除请使用 `-p` 指定项目目录。
-
-示例：
 ```bash
 asmgr remove skill-creator
 ```
 
-执行前会显示确认提示，输入 `y` 确认移除。
-
-#### 部分移除（仅从指定位置移除）
+**部分移除**（仅从指定 scope 解链/删目录，保留中央目录）：
 
 ```bash
-asmgr remove <skill> -a <agents...> [-g|-p <dir>]
-```
-
-仅从指定位置移除 skill（删除符号链接/目录，必要时更新配置），保留中央目录：
-
-**参数说明：**
-
-| 参数 | 说明 |
-|------|------|
-| `-a <agents...>` | 指定要移除的 agents |
-| `-g, --global` | 从全局安装移除 |
-| `-p, --project <dir>` | 从指定项目移除 |
-| 无 `-g/-p` | 从当前目录移除（默认） |
-
-**示例：**
-
-```bash
-# 从全局安装移除
-asmgr remove skill-creator -a cursor -g
-
-# 从指定项目移除
-asmgr remove skill-creator -a cursor -p ~/projects/foo
-
-# 从当前目录移除
-asmgr remove skill-creator -a cursor
-
-# 从多个 agents 移除（全局）
-asmgr remove skill-creator -a cursor claude-code -g
+asmgr remove skill-creator -a cursor -g                 # 从全局 cursor 移除
+asmgr remove skill-creator -a cursor -p ~/projects/foo  # 从指定项目移除
+asmgr remove skill-creator -a cursor                    # 从当前目录项目移除
+asmgr remove paper-writing-mentor -s                    # 移除 subagent 链接 + 更新清单
 ```
 
 ### Claude Code plugin / marketplace
 
-Claude Code 的 marketplace 仓库体量大（每个是一个 git repo），直接嵌进 `agent-settings` 不现实。asmgr 的做法是：**plugin/marketplace 本身用官方 `claude plugin` CLI 管理，asmgr 只负责把"装过哪些"声明式记录到 `skills.yaml`**，通过 `sync` 双向搬运。
+Claude Code 的 marketplace 仓库体量大（每个是一个 git repo），不适合直接嵌进 agent-settings。asmgr 的做法是：
+**plugin/marketplace 本身用官方 `claude plugin` CLI 安装/卸载，asmgr 只把“装过哪些”声明式记录到 `skills.yaml`**，
+通过**全局 scope 的 sync**（`-g` / `--all`）双向搬运。当前目录 / `-p` 项目级 sync 不涉及 plugin。
 
-**前置要求：** 本机已安装 Claude Code（`claude` CLI 可用）。
-
-#### 日常使用（用官方 CLI）
+**前置要求**：本机已安装 Claude Code（`claude` CLI 可用）。
 
 ```bash
-# 装 marketplace 和 plugin 完全用官方命令
+# 1) 用官方 CLI 安装
 claude plugin marketplace add openai/codex-plugin-cc
 claude plugin install codex@openai-codex
 
-# 改完后把当前状态写进 yaml
-asmgr sync --from-agents
+# 2) 把当前状态写进 yaml（全局 scope 才会带上 plugin）
+asmgr sync --from-agents -g
+
+# 3) 新机器 clone agent-settings 后恢复
+asmgr sync --from-config -g       # 或 --all
 ```
 
-`sync --from-agents` 在重建 skill 记录的同时，会读 `~/.claude/plugins/known_marketplaces.json` 和 `claude plugin list`，把 marketplace/plugin 信息合并写入 `skills.yaml` 的 `claude_code` 段。
-
-#### 新电脑恢复
-
-```bash
-# git clone agent-settings 到新机器后：
-asmgr sync --from-config
-```
-
-除了部署 skills 符号链接/复制目录外，若 yaml 里存在 `claude_code` 段，还会自动调用 `claude plugin marketplace add` + `claude plugin install` 重建所有声明过的 marketplace 和 plugin。已存在的条目会标 `[skip]` 跳过，幂等。
-
-未装 `claude` CLI 时会打印 warning 并跳过该步骤，不影响 skills 部署。
+`sync --from-agents -g` 会读 `~/.claude/plugins/known_marketplaces.json` 与 `claude plugin list`，把信息合并写入
+`skills.yaml` 的 `claude_code` 段；`sync --from-config -g/--all` 则调用 `claude plugin marketplace add` +
+`claude plugin install` 重建声明过的条目（已存在的标 `[skip]`，幂等）。未装 `claude` CLI 时打印 warning 并跳过，
+不影响 skills 部署。
 
 > 注意：
-> - `claude plugin list` 文本输出里不带 scope，`sync --from-agents` 导入时 plugin 默认记为 `scope: user`，如有 `project`/`local` 场景请手工编辑 yaml。
-> - marketplace 名以 `known_marketplaces.json` 的实际 key 为准，与传入的 GitHub repo 名可能不同（例如 `openai/codex-plugin-cc` 导入后叫 `openai-codex`）。
-> - 合并模式：`sync --from-agents` 不会删除 yaml 里 claude 未启用的条目，如需清理请直接编辑 `skills.yaml`。
+> - `claude plugin list` 文本输出不带 scope，导入时 plugin 默认记为 `scope: user`，如需 `project`/`local` 请手工编辑 yaml。
+> - marketplace 名以 `known_marketplaces.json` 的实际 key 为准，可能与传入的 repo 名不同（`openai/codex-plugin-cc` → `openai-codex`）。
+> - 合并模式：`sync --from-agents` 不删除 yaml 里 claude 未启用的条目，清理请直接编辑 `skills.yaml`。
 
-#### yaml schema（v2）
+## 配置与目录布局
 
-第一次写入 plugin/marketplace 记录时会把 `version` 升到 2，并新增 `claude_code:` 段：
+### skills.yaml（全局注册表）
+
+位于 `~/agent-settings/skills/skills.yaml`，记录全局安装：
+
+```yaml
+version: 1
+skills:
+  skill-creator:
+    agents_link: [claude-code, cursor]   # 以符号链接安装的 agents
+    agents_copy: [codex]                  # 以复制安装的 agents
+    source: https://github.com/anthropics/skills/tree/main/skills/skill-creator
+    added_at: "2026-02-03T23:22:36+08:00" # 本地时区，最近一次 add 的时间
+```
+
+启用 plugin/marketplace 后，`version` 升到 2 并新增 `claude_code` 段（仅涉及 plugin 的仓库才会出现，向后兼容）：
 
 ```yaml
 version: 2
-skills:
-  # ... 原有 skills 不变 ...
 claude_code:
   marketplaces:
     codex-plugin-cc:
-      source: openai/codex-plugin-cc     # 原样传给 `claude plugin marketplace add`
+      source: openai/codex-plugin-cc      # 原样传给 `claude plugin marketplace add`
       added_at: "2026-04-16T17:00:00+08:00"
   plugins:
     - name: openai-codex
@@ -355,156 +305,102 @@ claude_code:
       added_at: "2026-04-16T17:01:00+08:00"
 ```
 
-未涉及 plugin 的仓库保留 `version: 1` 和仅 `skills:` 段，完全向后兼容。
+### 项目清单（project manifest）
 
-## 配置文件
-
-配置文件位于 `~/agent-settings/skills/skills.yaml`：
+每个登记过的项目在 `~/agent-settings/projects/<name>.yaml` 有一份清单，结构对齐 `skills.yaml`，
+去掉 `source`/`added_at`，加 `subagents` 段与权威定位字段 `path`：
 
 ```yaml
-# Skill installation registry
-# Auto-managed by asmgr, can be manually edited
-
 version: 1
-
+path: Projects/foo          # $HOME 内存相对路径；$HOME 外存绝对路径（以 / 开头）
 skills:
-  skill-creator:
-    agents_link:
-      - claude-code
-      - cursor
-    agents_copy:
-      - codex
-    source: https://github.com/anthropics/skills/tree/main/skills/skill-creator
-    added_at: "2026-02-03T23:22:36+08:00"  # 本地时区，最近一次 add 的时间
-
-  code-simplifier:
-    agents_link:
-      - claude-code
-    agents_copy:
-      - codex
-    source: local:/Users/me/my-skills/code-simplifier
-    added_at: "2026-02-03T23:22:36+08:00"  # 本地时区，最近一次 add 的时间
+  paper-writing-mentor:
+    agents_link: [claude-code, codex]
+    agents_copy: []
+subagents:
+  paper-writing-mentor:     # 中央 agents/ 下的目录或 .md
+    agents_link: [claude-code]
+    agents_copy: []
 ```
 
-**字段说明：**
-- `agents_link`: 全局 link 安装的 agents 列表
-- `agents_copy`: 全局 copy 安装的 agents 列表
-- `source`: skill 来源
-- `added_at`: 记录时间（本地时区）
+文件名由 `path` 派生（`/` → `__`），定位只看 `path` 字段。
 
-启用 plugin/marketplace 后会额外有 `claude_code:` 段，见上节。
-
-## 目录结构
-
-### 中央存储
-
-所有 skills 统一存储在:
-
-```
-~/agent-settings/skills/
-├── skills.yaml              # 配置文件
-├── skill-creator/
-│   ├── SKILL.md
-│   └── ...
-├── code-simplifier/
-│   └── ...
-└── ...
-```
-
-### Agent 目录映射
-
-#### 全局安装（`-g`）
-
-| Agent | Skills 目录 |
-|-------|-------------|
-| cursor | `~/.cursor/skills/` |
-| claude-code | `~/.claude/skills/` |
-| codex | `~/.codex/skills/` |
-| gemini | `~/.gemini/skills/` |
-
-符号链接示例:
-
-```
-~/.cursor/skills/skill-creator → ~/agent-settings/skills/skill-creator
-~/.claude/skills/skill-creator → ~/agent-settings/skills/skill-creator
-```
-
-#### 本地安装（默认或 `-p`）
-
-| Agent | Skills 目录 |
-|-------|-------------|
-| cursor | `<project>/.cursor/skills/` |
-| claude-code | `<project>/.claude/skills/` |
-| codex | `<project>/.codex/skills/` |
-| gemini | `<project>/.gemini/skills/` |
-
-符号链接示例（假设项目在 `/Users/me/projects/foo`）:
-
-```
-/Users/me/projects/foo/.cursor/skills/skill-creator → ~/agent-settings/skills/skill-creator
-/Users/me/projects/foo/.claude/skills/skill-creator → ~/agent-settings/skills/skill-creator
-```
-
-**目录结构一致性**：无论全局还是本地，都使用相同的目录结构（`.cursor/skills/`, `.claude/skills/`, `.codex/skills/`, `.gemini/skills/`），这样 agents 可以识别并加载 skills。
-
-## 路径识别规则
+### 路径识别规则
 
 ```
 用户输入 source
-    │
     ├─ 是 GitHub URL? ──是──→ 从 GitHub 下载
-    │
     └─ 否
-        │
-        ├─ 以 /, ./, ../ 开头? ──是──→ 从本地路径复制
-        │
+        ├─ 以 /、./、../ 开头? ──是──→ 从本地路径复制
         └─ 否 ──→ 搜索中央目录
 ```
 
-**注意**: 如果当前目录有 `my-skill` 文件夹，输入 `my-skill` 会搜索中央目录。要使用当前目录的文件夹，必须输入 `./my-skill`。
+**注意**：输入 `my-skill`（无前缀）会搜索中央目录，即使当前目录有同名文件夹；要用当前目录的文件夹须写 `./my-skill`。
+
+## 源代码架构
+
+入口脚本 `asmgr.sh` 解析 symlink 定位自身目录，按序 `source` 六个 `lib/*.sh` 后分发命令。整体分三层：
+
+```
+                      ┌──────────────────────────────────────┐
+   编排层              │ asmgr.sh — 依赖检查 / 命令分发 / help   │
+                      │            全局 skill 的 status & sync│
+                      └──────────────────────────────────────┘
+                                        │ 调用
+   能力层   materialize │ yaml │ project │ sources │ plugin
+                                        │ 依赖
+   地基层               └──────────  core.sh  ──────────┘
+```
+
+| 文件 | 职责 |
+|------|------|
+| `asmgr.sh` | 入口：依赖检查、按序 source 各 lib、`show_help`、命令分发，以及**全局** skill 的 status/sync 实现 |
+| `lib/core.sh` | 地基：共享常量、`get_agent_dir` / `normalize_base_dir` / `resolve_base_dir` 路径解析、打印与确认工具、`check_dependencies` |
+| `lib/materialize.sh` | 底层原语：建链 `mat_deploy_link`、建副本 `mat_deploy_copy`、扫描 `mat_scan_central_links`、状态判定 `mat_classify`（全局与项目两条路径共用） |
+| `lib/yaml.sh` | 读写全局 `skills.yaml`（skill 注册表的增删改查） |
+| `lib/project.sh` | 项目局域清单（`projects/*.yaml`）的 CRUD、项目级部署/扫描/状态、subagent 链接 |
+| `lib/sources.sh` | skill 来源获取（GitHub 下载 / 本地复制 / 中央搜索）并安装到 agent 目录 |
+| `lib/plugin.sh` | Claude Code plugin/marketplace 与 `skills.yaml` 的 `claude_code` 段互转（仅全局 scope 触发） |
+
+**core.sh 的共享常量**：`SKILLS_DIR`（`~/agent-settings/skills`）、`SKILLS_YAML`、`AGENTS_DIR`（中央 subagents）、
+`PROJECTS_DIR`（项目清单目录）、`SUPPORTED_AGENTS`（`cursor claude-code codex gemini`）。
+（`CLAUDE_PLUGINS_DIR` 属 plugin 相关，定义在 `lib/plugin.sh`。）
+
+**scope 决定数据落点**——这是理解架构的关键：
+
+- **全局 `-g`** → 操作 `$HOME`、读写 `skills.yaml`（`yaml.sh`），并**带上 plugin/marketplace**（`plugin.sh`）。
+- **项目 `-p` / cwd** → 操作项目目录、读写 `projects/<name>.yaml`（`project.sh`），**不碰 plugin**。
+- **`--all`** → 全局 + 所有已登记项目。
+
+无论哪条路径，最终的“建链 / 建副本 / 扫描 / 判定状态”都收敛到 `materialize.sh` 的 `mat_*` 原语，
+因此全局与项目的落盘行为一致。
+
+### Smoke Test
+
+内置一键回归脚本，使用临时 `HOME` 与临时 skill 名，不污染真实配置，并自动应答确认提示：
+
+```bash
+asmgr/smoke_test.sh
+```
 
 ## 依赖要求
 
-- `git` (用于 GitHub 下载)
+- `git`（GitHub 下载）
 - `bash` 4.0+
-- `yq` (必需，用于 YAML 处理)
-  - 官方仓库: https://github.com/mikefarah/yq
-  - macOS 安装: `brew install yq`
-  - Linux 安装: 参见 https://github.com/mikefarah/yq#install
-- `jq` (必需，用于 plugin/marketplace 子命令读取 Claude Code 的 JSON 状态)
-  - macOS 安装: `brew install jq`
-  - Linux 安装: `sudo apt-get install jq` 或 `sudo yum install jq`
-- `claude` CLI（仅 plugin/marketplace 子命令需要）
-  - 参见 https://docs.claude.com/en/docs/claude-code
-- 标准 Unix 工具: `cp`, `ln`, `mkdir`, `basename`
+- `yq`（必需，YAML 处理）— https://github.com/mikefarah/yq ；macOS `brew install yq`
+- `jq`（必需；实际只被 plugin/marketplace 子命令用到，但启动时与 yq/git 一同强制检查）— macOS `brew install jq`，Linux `apt-get install jq`
+- `claude` CLI（仅 plugin/marketplace 子命令需要）— https://docs.claude.com/en/docs/claude-code
+- 标准 Unix 工具：`cp`、`ln`、`mkdir`、`basename`
 
-**注意**: asmgr 启动时会自动检查 yq/jq 是否已安装，如未安装会显示安装指引。
+asmgr 启动时强制检查 git/yq/jq，缺任一则打印安装指引并拒绝运行。
 
 ## 常见问题
 
-### Skill 已存在如何处理？
+**Skill 已存在？** 提示确认是否覆盖（`y/N`）。
 
-工具会提示确认是否覆盖:
+**Agent 目录不存在？** `add` 跳过该 agent 并警告；`sync --from-config` 会自动创建目录。
 
-```
-[WARN] Skill 已存在: ~/agent-settings/skills/skill-creator
-是否覆盖? (y/N)
-```
-
-### Agent 目录不存在怎么办？
-
-- `add` 命令会跳过该 agent 并显示警告
-- `sync --from-config` 会自动创建 agent 目录
-
-### 如何验证安装状态？
-
-```bash
-# 查看所有 skills 状态
-asmgr list
-
-# 检查一致性
-asmgr status
-```
+**怎么验证安装状态？** `asmgr list` 看清单，`asmgr status` 查一致性（加 `-g`/`--all` 切换 scope）。
 
 ## 相关链接
 
