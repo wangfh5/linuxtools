@@ -167,7 +167,7 @@ plugin_sync_apply() {
     fi
 
     echo
-    print_info "Plugin/marketplace 部署完成"
+    info_done "Plugin/marketplace 部署"
 }
 
 # 反向 sync：从 claude 当前状态合并到 skills.yaml（不删除 yaml 中 claude 未启用的条目）
@@ -226,6 +226,6 @@ plugin_sync_from_claude() {
     fi
 
     echo
-    print_info "导入完成：新增 $added_mkt 个 marketplace、$added_plugin 个 plugin"
+    info_done "导入" "新增 $added_mkt 个 marketplace、$added_plugin 个 plugin"
     print_info "（合并模式：yaml 中 claude 未启用的条目未被删除，如需清理请手工编辑 $SKILLS_YAML）"
 }

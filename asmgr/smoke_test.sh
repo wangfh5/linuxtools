@@ -229,6 +229,7 @@ tc_add_global_link_and_record() {
     assert_rc "按名 add 退出码 0" 0
     assert_symlink "全局 gemini 链接" "$H/.gemini/skills/alpha"
     assert_symlink "全局 claude-code 链接" "$H/.claude/skills/alpha"
+    assert_contains "add 完成消息" "$OUT" "添加完成"
 }
 
 tc_link_to_copy_migration_and_field_order() {
@@ -389,6 +390,21 @@ tc_project_add_default_cwd_in_home() {
     assert_not_contains "项目 MISSING 不带全局后缀(配置有)" "$OUT" "(配置有"
 }
 
+tc_no_manifest_isomorphism() {
+    note "无清单时 list 与 status 输出同构（WARN + 提示）"
+    local H; H=$(new_home)
+    local proj="$H/empty-proj"; /bin/mkdir -p "$proj"
+    run_in "$proj" list
+    assert_contains "list 无清单 WARN" "$OUT" "无项目清单:"
+    assert_contains "list 无清单含 scope 提示" "$OUT" "试试 -g（全局）或 --all（全局 + 所有项目）"
+    run_in "$proj" status
+    assert_contains "status 无清单 WARN" "$OUT" "无项目清单:"
+    assert_contains "status 无清单含 scope 提示" "$OUT" "试试 -g（全局）或 --all（全局 + 所有项目）"
+    run_in "$proj" sync --from-config
+    assert_contains "sync 无清单 WARN" "$OUT" "无项目清单:"
+    assert_contains "sync 无清单含 scope 提示" "$OUT" "试试 -g（全局）或 --all（全局 + 所有项目）"
+}
+
 tc_project_add_p_outside_home() {
     note "add -p（$HOME 外项目）：绝对命名 (前导 __)"
     H=$(new_home)
@@ -437,7 +453,7 @@ tc_subagent_dir_and_md() {
     run list -p "$proj"
     assert_contains "list 显示 subagents 段" "$OUT" "subagents"
     run status -p "$proj"
-    assert_contains "subagent status 报 OK" "$OUT" "subagent dir-agent"
+    assert_contains "subagent status 报 OK" "$OUT" "Subagent dir-agent"
 
     # 移除其一
     run remove dir-agent -s -p "$proj"
@@ -656,6 +672,7 @@ tc_remove_complete() {
     assert_absent "全局 cursor 链接已删" "$H/.cursor/skills/alpha"
     assert_absent "全局 claude-code 链接已删" "$H/.claude/skills/alpha"
     assert_eq "yaml 记录已删" "null" "$(yq -r '.skills.alpha // "null"' "$yaml")"
+    assert_contains "remove 完成消息" "$OUT" "移除完成"
 }
 
 tc_invalid_inputs() {
@@ -808,7 +825,7 @@ tc_project_orphan_fix() {
     run status -p "$proj"
     assert_contains "报告游离 skill (ORPHAN)" "$OUT" "orphan-skill @ claude-code"
     assert_contains "报告游离 copy skill (ORPHAN, copy 分支)" "$OUT" "orphan-copy @ codex (copy 存在"
-    assert_contains "报告游离 subagent (ORPHAN)" "$OUT" "subagent stray.md"
+    assert_contains "报告游离 subagent (ORPHAN)" "$OUT" "Subagent stray.md"
 
     run status --fix -p "$proj"
     assert_contains "提示删除游离链接" "$OUT" "已删除游离链接"
@@ -817,6 +834,33 @@ tc_project_orphan_fix() {
     assert_absent "游离 subagent 链接已删" "$proj/.claude/agents/stray.md"
     assert_symlink "已登记 alpha 链接保留" "$proj/.claude/skills/alpha"
     assert_symlink "已登记 mentor 链接保留" "$proj/.claude/agents/mentor.md"
+}
+
+tc_status_all_exit_folds_global() {
+    note "status --all 退出码折叠：仅全局不一致也返回非零"
+    # --- 制造全局不一致：add -g 后删除链接，使其 MISSING ---
+    local H; H=$(new_home); seed_agent_dirs "$H"
+    mk_central_skill "$H" "zz"
+    run add zz -a cursor -g          # registers in skills.yaml + creates ~/.cursor/skills/zz
+    rm -f "$H/.cursor/skills/zz"     # 配置有，链接没了 → MISSING
+
+    run status --all
+    assert_rc_nonzero "status --all 全局不一致 → 非零"
+
+    # --- 干净环境下 status --all 应返回 0 ---
+    local H2; H2=$(new_home); seed_agent_dirs "$H2"
+    OUT=$(HOME="$H2" "$SM" status --all 2>/dev/null); RC=$?
+    assert_rc "干净环境 status --all → 0" 0
+}
+
+tc_sync_all_exit_folds_global() {
+    note "sync --from-config --all 退出码折叠：全局配置缺失也返回非零"
+    # new_home 建 agent-settings/skills/ 目录但不创建 skills.yaml，
+    # 因此 sync_from_config 返回 1（"配置文件不存在"），整个 --all 应传播非零。
+    local H; H=$(new_home)
+    runc sync --from-config --all
+    assert_rc_nonzero "sync --from-config --all 全局配置缺失 → 非零"
+    assert_contains "仍打印配置缺失" "$OUT" "配置文件不存在"
 }
 
 # ════════════════════════════ 运行 ════════════════════════════
@@ -829,7 +873,10 @@ tc_status_global_ok
 tc_status_global_missing_fix
 tc_status_global_wrong_fix
 tc_status_global_orphan_fix
+tc_status_all_exit_folds_global
+tc_sync_all_exit_folds_global
 tc_project_add_default_cwd_in_home
+tc_no_manifest_isomorphism
 tc_project_add_p_outside_home
 tc_project_orphan_fix
 tc_subagent_dir_and_md

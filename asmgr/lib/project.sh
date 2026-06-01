@@ -59,7 +59,7 @@ resolve_subagent_name() {
     if [[ -e "$AGENTS_DIR/$query.md" ]]; then
         echo "$query.md"; return 0
     fi
-    print_error "未找到 subagent: $query (在 $AGENTS_DIR)" >&2
+    print_error "未找到 Subagent: $query (在 $AGENTS_DIR)" >&2
     return 1
 }
 
@@ -184,7 +184,7 @@ link_subagent_to_project() {
     local base_dir="$1" name="$2"
     local src="$AGENTS_DIR/$name"
     if [[ ! -e "$src" ]]; then
-        print_warn "中央 subagent 不存在，跳过: $src"
+        print_warn "中央 Subagent 不存在，跳过: $src"
         return 1
     fi
     local tgt_dir target
@@ -194,7 +194,7 @@ link_subagent_to_project() {
     if [[ -L "$target" ]]; then
         local cur; cur=$(readlink "$target")
         if [[ "$cur" == "$src" ]]; then
-            print_info "  ✓ subagent $name (已存在)"
+            print_info "  ✓ Subagent $name (已存在)"
             return 0
         fi
         /bin/rm "$target"
@@ -203,10 +203,10 @@ link_subagent_to_project() {
         return 1
     fi
     if /bin/ln -sfn "$src" "$target"; then
-        print_info "  ✓ subagent $name -> claude-code"
+        print_info "  ✓ Subagent $name -> claude-code"
         return 0
     fi
-    print_error "创建 subagent 链接失败: $target"
+    print_error "创建 Subagent 链接失败: $target"
     return 1
 }
 
@@ -216,11 +216,11 @@ unlink_subagent_from_project() {
     tgt_dir="$(get_subagent_target_dir "$base_dir")"
     target="$tgt_dir/$name"
     if [[ -L "$target" ]]; then
-        /bin/rm "$target" && print_info "  ✓ 已删除 subagent 链接: $target"
+        /bin/rm "$target" && print_info "  ✓ 已删除 Subagent 链接: $target"
     elif [[ -e "$target" ]]; then
-        print_warn "subagent 目标非符号链接，跳过: $target"
+        print_warn "Subagent 目标非符号链接，跳过: $target"
     else
-        print_info "  - subagent $name: 未找到链接"
+        echo "  - Subagent $name: 未找到链接"
     fi
 }
 
@@ -232,7 +232,7 @@ _project_deploy_skill() {
     while IFS= read -r agent; do
         [[ -z "$agent" ]] && continue
         agent_dir=$(get_agent_dir "$agent" "$project_dir" 2>/dev/null)
-        if [[ -z "$agent_dir" ]]; then print_warn "不支持的 agent: $agent"; continue; fi
+        if [[ -z "$agent_dir" ]]; then print_warn "不支持的 Agent: $agent"; continue; fi
         [[ ! -d "$agent_dir" ]] && /bin/mkdir -p "$agent_dir"
         mat_deploy_link "$skill_source" "$agent_dir" "$name" "$agent"
     done <<< "$link_agents"
@@ -240,7 +240,7 @@ _project_deploy_skill() {
     while IFS= read -r agent; do
         [[ -z "$agent" ]] && continue
         agent_dir=$(get_agent_dir "$agent" "$project_dir" 2>/dev/null)
-        if [[ -z "$agent_dir" ]]; then print_warn "不支持的 agent: $agent"; continue; fi
+        if [[ -z "$agent_dir" ]]; then print_warn "不支持的 Agent: $agent"; continue; fi
         [[ ! -d "$agent_dir" ]] && /bin/mkdir -p "$agent_dir"
         mat_deploy_copy "$skill_source" "$agent_dir" "$name" "$agent"
     done <<< "$copy_agents"
@@ -249,7 +249,7 @@ _project_deploy_skill() {
 # 按清单重建一个项目的全部链接
 project_deploy_one() {
     local file="$1"
-    if [[ ! -f "$file" ]]; then print_warn "清单不存在: $file"; return 1; fi
+    if [[ ! -f "$file" ]]; then warn_no_manifest "$file"; return 1; fi
     local stored_path project_dir
     stored_path="$(pm_get_path "$file")"
     if [[ -z "$stored_path" ]]; then print_warn "清单缺少 path 字段，跳过: $file"; return 1; fi
@@ -262,7 +262,7 @@ project_deploy_one() {
     while IFS= read -r name; do
         [[ -z "$name" ]] && continue
         local skill_source="$SKILLS_DIR/$name"
-        if [[ ! -d "$skill_source" ]]; then print_warn "中央 skill 不存在，跳过: $skill_source"; continue; fi
+        if [[ ! -d "$skill_source" ]]; then print_warn "中央 Skill 不存在，跳过: $skill_source"; continue; fi
         local link_agents copy_agents
         link_agents=$(pm_get_entry_agents "$file" "skills" "$name" "agents_link")
         copy_agents=$(pm_get_entry_agents "$file" "skills" "$name" "agents_copy")
@@ -282,9 +282,9 @@ project_deploy_all() {
         any=1
         project_deploy_one "$PROJECTS_DIR/$proj.yaml"
     done <<< "$(pm_list_projects)"
-    [[ $any -eq 0 ]] && print_info "没有已登记的项目"
+    [[ $any -eq 0 ]] && print_warn "没有已登记的项目"
     # 部署是 best-effort（个别项目缺失只告警跳过），整体视为成功；显式 return 0 以免
-    # 末句 [[ $any -eq 0 ]] 在“有项目”时求值为假、把退出码泄漏成 1（旧缺陷①）。
+    # 末句 [[ $any -eq 0 ]] 在”有项目”时求值为假、把退出码泄漏成 1（旧缺陷①）。
     return 0
 }
 
@@ -303,7 +303,7 @@ project_scan_one() {
         local method sname
         while IFS=$'\t' read -r method sname; do
             [[ -z "$method" ]] && continue
-            print_info "发现 skill: $sname -> $agent ($method)"
+            print_info "发现 Skill: $sname -> $agent ($method)"
             pm_update_entry "$manifest" "skills" "$sname" "$method" "$agent"
             found=1
         done <<< "$(mat_scan_central_links "$agent_dir" "$SKILLS_DIR" 1)"
@@ -313,7 +313,7 @@ project_scan_one() {
     local method sname
     while IFS=$'\t' read -r method sname; do
         [[ -z "$method" ]] && continue
-        print_info "发现 subagent: $sname -> claude-code"
+        print_info "发现 Subagent: $sname -> claude-code"
         pm_update_entry "$manifest" "subagents" "$sname" "link" "claude-code"
         found=1
     done <<< "$(mat_scan_central_links "$sub_dir" "$AGENTS_DIR" 0)"
@@ -342,7 +342,7 @@ _status_fix_copy() {
     if [[ -d "$src" && -d "$agent_dir" ]]; then
         if /bin/rm -rf "$link_path" && /bin/cp -r "$src" "$link_path"; then echo "    已修复"; else print_error "    修复失败: $link_path"; fi
     else
-        echo "    无法修复: 源或 agent 目录不存在"
+        echo "    无法修复: 源或目标目录不存在"
     fi
 }
 
@@ -360,16 +360,16 @@ _status_check_entry() {
         IFS=$'\t' read -r state actual <<< "$cls"
         if [[ "$method" == "link" ]]; then
             case "$state" in
-                ok)           echo -e "  ${GREEN}[OK]${NC} $name -> $agent" ;;
-                wrong_target) echo -e "  ${YELLOW}[WRONG]${NC} $name -> $agent (链接目标错误: $actual)"; issue=1; _status_fix_link "$fix_mode" "$src" "$agent_dir" "$link_path" ;;
-                wrong_type)   echo -e "  ${YELLOW}[WRONG]${NC} $name -> $agent (期望链接，实际为目录/文件)"; issue=1; _status_fix_link "$fix_mode" "$src" "$agent_dir" "$link_path" ;;
-                missing)      echo -e "  ${RED}[MISSING]${NC} $name -> $agent"; issue=1; _status_fix_link "$fix_mode" "$src" "$agent_dir" "$link_path" ;;
+                ok)           print_status_tag OK "$name -> $agent" "  " ;;
+                wrong_target) print_status_tag WRONG "$name -> $agent (链接目标错误: $actual)" "  "; issue=1; _status_fix_link "$fix_mode" "$src" "$agent_dir" "$link_path" ;;
+                wrong_type)   print_status_tag WRONG "$name -> $agent (期望链接，实际为目录/文件)" "  "; issue=1; _status_fix_link "$fix_mode" "$src" "$agent_dir" "$link_path" ;;
+                missing)      print_status_tag MISSING "$name -> $agent" "  "; issue=1; _status_fix_link "$fix_mode" "$src" "$agent_dir" "$link_path" ;;
             esac
         else
             case "$state" in
-                ok)         echo -e "  ${GREEN}[OK]${NC} $name -> $agent (copy)" ;;
-                wrong_type) echo -e "  ${YELLOW}[WRONG]${NC} $name -> $agent (期望 copy，实际非目录)"; issue=1; _status_fix_copy "$fix_mode" "$src" "$agent_dir" "$link_path" ;;
-                missing)    echo -e "  ${RED}[MISSING]${NC} $name -> $agent (copy 不存在)"; issue=1; _status_fix_copy "$fix_mode" "$src" "$agent_dir" "$link_path" ;;
+                ok)         print_status_tag OK "$name -> $agent (copy)" "  " ;;
+                wrong_type) print_status_tag WRONG "$name -> $agent (期望 copy，实际非目录)" "  "; issue=1; _status_fix_copy "$fix_mode" "$src" "$agent_dir" "$link_path" ;;
+                missing)    print_status_tag MISSING "$name -> $agent (copy 不存在)" "  "; issue=1; _status_fix_copy "$fix_mode" "$src" "$agent_dir" "$link_path" ;;
             esac
         fi
     done <<< "$agents"
@@ -386,10 +386,10 @@ _status_check_subagent() {
     cls=$(mat_classify "$target" "$src" "link")
     IFS=$'\t' read -r state actual <<< "$cls"
     case "$state" in
-        ok)           echo -e "  ${GREEN}[OK]${NC} subagent $name -> claude-code" ;;
-        wrong_target) echo -e "  ${YELLOW}[WRONG]${NC} subagent $name (链接目标错误: $actual)"; issue=1; _status_fix_link "$fix_mode" "$src" "$tgt_dir" "$target" ;;
-        wrong_type)   echo -e "  ${YELLOW}[WRONG]${NC} subagent $name (期望链接，实际为目录/文件)"; issue=1; _status_fix_link "$fix_mode" "$src" "$tgt_dir" "$target" ;;
-        missing)      echo -e "  ${RED}[MISSING]${NC} subagent $name"; issue=1; _status_fix_link "$fix_mode" "$src" "$tgt_dir" "$target" ;;
+        ok)           print_status_tag OK "Subagent $name -> claude-code" "  " ;;
+        wrong_target) print_status_tag WRONG "Subagent $name (链接目标错误: $actual)" "  "; issue=1; _status_fix_link "$fix_mode" "$src" "$tgt_dir" "$target" ;;
+        wrong_type)   print_status_tag WRONG "Subagent $name (期望链接，实际为目录/文件)" "  "; issue=1; _status_fix_link "$fix_mode" "$src" "$tgt_dir" "$target" ;;
+        missing)      print_status_tag MISSING "Subagent $name" "  "; issue=1; _status_fix_link "$fix_mode" "$src" "$tgt_dir" "$target" ;;
     esac
     return $issue
 }
@@ -413,7 +413,7 @@ _project_scan_orphans() {
                 has_agent_in_list "$agent" "${listed[@]}" && in_config=1
             fi
             if [[ $in_config -eq 0 ]]; then
-                echo -e "  ${YELLOW}[ORPHAN]${NC} $sname @ $agent ($method 存在，清单无)"; issue=1
+                print_status_tag ORPHAN "$sname @ $agent ($method 存在，清单无)" "  "; issue=1
                 if [[ $fix_mode -eq 1 ]]; then /bin/rm -rf "$agent_dir/$sname" && echo "    已删除游离链接"; fi
             fi
         done <<< "$(mat_scan_central_links "$agent_dir" "$SKILLS_DIR" 1)"
@@ -430,7 +430,7 @@ _project_scan_orphans() {
             has_agent_in_list "claude-code" "${listed[@]}" && in_config=1
         fi
         if [[ $in_config -eq 0 ]]; then
-            echo -e "  ${YELLOW}[ORPHAN]${NC} subagent $sname (存在，清单无)"; issue=1
+            print_status_tag ORPHAN "Subagent $sname (存在，清单无)" "  "; issue=1
             if [[ $fix_mode -eq 1 ]]; then /bin/rm -f "$sub_dir/$sname" && echo "    已删除游离链接"; fi
         fi
     done <<< "$(mat_scan_central_links "$sub_dir" "$AGENTS_DIR" 0)"
@@ -481,7 +481,7 @@ project_status_all() {
         any=1
         project_status_one "$PROJECTS_DIR/$proj.yaml" "$fix_mode" || issues=1
     done <<< "$(pm_list_projects)"
-    [[ $any -eq 0 ]] && print_info "没有已登记的项目"
+    [[ $any -eq 0 ]] && print_warn "没有已登记的项目"
     return $issues
 }
 

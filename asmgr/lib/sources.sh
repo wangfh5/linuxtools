@@ -34,7 +34,7 @@ parse_github_url() {
 download_from_github() {
     local temp_dir=$(/usr/bin/mktemp -d)
 
-    print_info "下载 skill: $SKILL_NAME"
+    print_info "下载 Skill: $SKILL_NAME"
     print_info "来源: https://github.com/$OWNER/$REPO (分支: $BRANCH, 路径: $REPO_PATH)"
 
     # 使用 git sparse-checkout 只下载指定目录
@@ -137,7 +137,7 @@ search_skill_in_central() {
         return 0
     else
         # 多个匹配，让用户选择（输出到 stderr 避免污染返回值）
-        print_info "找到多个匹配的 skills:" >&2
+        print_info "找到多个匹配的 Skills:" >&2
         local i=1
         for match in "${matches[@]}"; do
             echo "  $i) $match" >&2
@@ -176,7 +176,7 @@ link_from_central() {
     # 提取 skill 名称
     SKILL_NAME=$(/usr/bin/basename "$skill_path")
 
-    print_info "使用已存在的 skill: $SKILL_NAME"
+    print_info "使用已存在的 Skill: $SKILL_NAME"
 
     return 0
 }
@@ -200,7 +200,7 @@ copy_from_local() {
     # 提取 skill 名称
     SKILL_NAME=$(/usr/bin/basename "$source_path")
 
-    print_info "复制 skill: $SKILL_NAME"
+    print_info "复制 Skill: $SKILL_NAME"
     print_info "来源: $source_path"
 
     local target_dir="$SKILLS_DIR/$SKILL_NAME"
@@ -254,7 +254,7 @@ install_to_agents() {
     if [[ "$mode" == "link" ]]; then
         print_info "创建符号链接到 agents..."
     else
-        print_info "复制 skill 到 agents..."
+        print_info "复制 Skill 到 agents..."
     fi
 
     local skill_source="$SKILLS_DIR/$SKILL_NAME"
@@ -263,7 +263,7 @@ install_to_agents() {
     for agent in "${agents[@]}"; do
         local agent_dir
         if ! agent_dir=$(get_agent_dir "$agent" "$base_dir"); then
-            print_error "不支持的 agent: $agent"
+            print_error "不支持的 Agent: $agent"
             [[ "$mode" == "link" ]] && print_error "支持的 agents: $SUPPORTED_AGENTS"
             _failed_agents+=("$agent")
             continue

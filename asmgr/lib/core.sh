@@ -184,6 +184,42 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# 无项目清单（空状态=WARN）。canonical 文案只此一处。
+# 用法: warn_no_manifest "$manifest_path"
+warn_no_manifest() {
+    print_warn "无项目清单: $1"
+}
+
+# 引导用户切换 scope 的提示（INFO 级）。canonical 文案只此一处。
+hint_other_scopes() {
+    print_info "提示: 试试 -g（全局）或 --all（全局 + 所有项目）"
+}
+
+# 统一完成消息（INFO 级，无叹号）。用法: info_done <动作> [对象]
+#   info_done "添加" "skill-x"  -> [INFO] 添加完成: skill-x
+#   info_done "同步"            -> [INFO] 同步完成
+info_done() {
+    if [[ -n "${2:-}" ]]; then
+        print_info "$1完成: $2"
+    else
+        print_info "$1完成"
+    fi
+}
+
+# 统一 status 详情标签行（区别于 [INFO]/[WARN]/[ERROR] 日志级别，这是检查结果分类）。
+# 用法: print_status_tag <OK|MISSING|WRONG|ORPHAN> "<msg>" ["<indent>"]
+print_status_tag() {
+    local tag="$1" msg="$2" indent="${3:-}"
+    local color
+    case "$tag" in
+        OK)            color="$GREEN" ;;
+        MISSING)       color="$RED" ;;
+        WRONG|ORPHAN)  color="$YELLOW" ;;
+        *)             color="$NC" ;;
+    esac
+    echo -e "${indent}${color}[${tag}]${NC} ${msg}"
+}
+
 # 通用 y/N 提示（需按回车确认；支持 y/yes, n/no；空输入走默认值）
 # 用法: if prompt_yes_no "是否继续? (y/N) " "N"; then ...; fi
 prompt_yes_no() {
