@@ -650,6 +650,36 @@ tc_sync_from_config_global_idempotent() {
     assert_contains "二次提示已存在（幂等）" "$OUT" "已存在"
 }
 
+tc_sync_from_config_prunes_orphans() {
+    note "sync --from-config -g：删除 yaml 未声明的游离链接（config 即真相）"
+    H=$(new_home); seed_agent_dirs "$H"
+    mk_central_skill "$H" "alpha"
+    mk_central_skill "$H" "ghost"
+    run add alpha -a cursor -g                                  # 仅 alpha 登记进 yaml
+    ln -s "$H/agent-settings/skills/ghost" "$H/.cursor/skills/ghost"  # 游离链接，配置无
+
+    run sync --from-config -g
+    assert_rc "sync --from-config -g 退出码 0" 0
+    assert_symlink "已声明的 alpha 保留" "$H/.cursor/skills/alpha"
+    assert_absent "游离的 ghost 已删除" "$H/.cursor/skills/ghost"
+    assert_contains "提示删除游离链接" "$OUT" "已删除游离链接"
+}
+
+tc_sync_from_config_prune_spares_copies() {
+    note "sync --from-config -g：prune 只删链接，同名实体目录（疑似用户数据）不被 rm"
+    H=$(new_home); seed_agent_dirs "$H"
+    mk_central_skill "$H" "alpha"
+    run add alpha -a cursor -g
+    # 与中央 skill 同名的实体目录：copy 游离仅靠同名碰撞判定，prune 必须放过它
+    mkdir -p "$H/.cursor/skills/userdir"
+    printf 'precious\n' > "$H/.cursor/skills/userdir/data.txt"
+    mkdir -p "$H/agent-settings/skills/userdir"
+
+    run sync --from-config -g
+    assert_rc "sync --from-config -g 退出码 0" 0
+    assert_present "同名实体目录未被删除" "$H/.cursor/skills/userdir/data.txt"
+}
+
 tc_sync_from_config_project_and_all() {
     note "sync --from-config：-p 单项目 / --all 全局+所有项目"
     H=$(new_home); seed_agent_dirs "$H"
@@ -984,6 +1014,8 @@ tc_subagent_disambiguation
 tc_sync_from_agents_global
 tc_sync_from_agents_project_migration
 tc_sync_from_config_global_idempotent
+tc_sync_from_config_prunes_orphans
+tc_sync_from_config_prune_spares_copies
 tc_sync_from_config_project_and_all
 tc_sync_real_file_guard
 tc_sync_missing_central

@@ -47,7 +47,7 @@ scope 约定（所有命令通用，决定操作落在哪里）:
     list   [-g | -p <dir> | --all]                列出 skills/项目
     status [--fix] [-g | -p <dir> | --all]        检查链接一致性（--fix 自动修复）
     sync --from-agents [-g | -p <dir>]            从现有安装（link/copy）反向重建配置
-    sync --from-config [-g | -p <dir> | --all]    从配置正向重建链接
+    sync --from-config [-g | -p <dir> | --all]    从配置正向重建链接（全局 scope 下 config 即真相：删除未声明的游离链接）
     remove <skill> [-a <agents...>] [-s] [-g|-p <dir>]  从指定 scope 移除 skill/subagent
     remove <skill>（不带 -a/-s/scope）             完全移除（中央目录 + 全局安装 + 配置）
 
@@ -527,8 +527,38 @@ status_check_configured_skill() {
     return $found_issue
 }
 
+# 判定全局某条 (skill, method, agent) 链接是否游离：skills.yaml 无此 skill，
+# 或该 method 对应字段未列出此 agent。返回 0=游离, 1=已登记。
+_skill_orphan_at() {
+    local skill_name="$1" method="$2" agent="$3"
+    skill_exists_in_yaml "$skill_name" || return 0
+    local field
+    field=$(agents_field_for_method "$method")
+    local listed_agents=() line
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && listed_agents+=("$line")
+    done <<< "$(get_skill_agents_field "$skill_name" "$field")"
+    has_agent_in_list "$agent" "${listed_agents[@]}" && return 1
+    return 0
+}
+
+# 枚举全局游离链接：指向中央 SKILLS_DIR 但 skills.yaml 未声明的条目。
+# 每行输出 "<agent>\t<method>\t<name>"。供 status（报告/登记）与 sync（删除）共用。
+scan_global_orphans() {
+    local agent agent_dir method skill_name
+    for agent in $SUPPORTED_AGENTS; do
+        agent_dir=$(get_agent_dir "$agent" "$HOME")
+        [[ ! -d "$agent_dir" ]] && continue
+        while IFS=$'\t' read -r method skill_name; do
+            [[ -z "$method" ]] && continue
+            _skill_orphan_at "$skill_name" "$method" "$agent" \
+                && printf '%s\t%s\t%s\n' "$agent" "$method" "$skill_name"
+        done <<< "$(mat_scan_central_links "$agent_dir" "$SKILLS_DIR" 1)"
+    done
+}
+
 # 扫描孤立的安装（agent 目录存在但配置中未声明）
-# 返回 0=无孤立, 1=有孤立
+# 返回 0=无孤立, 1=有孤立。--fix 把游离链接登记进配置（reality→config，对齐 --from-agents）。
 status_scan_orphans() {
     local fix_mode=$1
     local found_issue=0
@@ -536,41 +566,19 @@ status_scan_orphans() {
     echo
     echo "检查孤立链接/复制..."
 
-    for agent in $SUPPORTED_AGENTS; do
-        local agent_dir
-        agent_dir=$(get_agent_dir "$agent" "$HOME")
-
-        [[ ! -d "$agent_dir" ]] && continue
-
-        local method skill_name
-        while IFS=$'\t' read -r method skill_name; do
-            [[ -z "$method" ]] && continue
-
-            local in_config=0
-            if skill_exists_in_yaml "$skill_name"; then
-                local field
-                field=$(agents_field_for_method "$method")
-                local listed_agents=()
-                local line
-                while IFS= read -r line; do
-                    [[ -n "$line" ]] && listed_agents+=("$line")
-                done <<< "$(get_skill_agents_field "$skill_name" "$field")"
-
-                if has_agent_in_list "$agent" "${listed_agents[@]}"; then
-                    in_config=1
-                fi
-            fi
-
-            if [[ $in_config -eq 0 ]]; then
-                print_status_tag ORPHAN "$skill_name @ $agent ($method 存在，配置无)"
-                found_issue=1
-                if [[ $fix_mode -eq 1 ]]; then
-                    update_skills_yaml "$skill_name" "unknown" 0 "$method" "$agent"
-                    echo "  已添加到配置"
-                fi
-            fi
-        done <<< "$(mat_scan_central_links "$agent_dir" "$SKILLS_DIR" 1)"
-    done
+    local agent method skill_name
+    while IFS=$'\t' read -r agent method skill_name; do
+        [[ -z "$agent" ]] && continue
+        print_status_tag ORPHAN "$skill_name @ $agent ($method 存在，配置无)"
+        found_issue=1
+        if [[ $fix_mode -eq 1 ]]; then
+            update_skills_yaml "$skill_name" "unknown" 0 "$method" "$agent"
+            echo "  已添加到配置"
+        elif [[ "$method" == "copy" ]]; then
+            # copy 游离 sync --from-config 不会清理（无法与用户数据区分），提示手动处置
+            echo "  copy 游离：--fix 登记或手动删除"
+        fi
+    done <<< "$(scan_global_orphans)"
 
     return $found_issue
 }
@@ -749,6 +757,24 @@ EOF
     fi
 }
 
+# 删除全局游离链接（指向中央目录但 skills.yaml 未声明）。config→reality 的清理半边。
+# 只删符号链接：copy 的“游离”靠同名碰撞判定（见 mat_scan_central_links），无法与用户
+# 自有目录区分，rm -rf 会误删数据；与 mat_deploy_copy 保护实体占位的策略对齐，copy 游离
+# 仅由 status 报告、交用户处置。
+sync_prune_orphans() {
+    local agent method skill_name agent_dir
+    while IFS=$'\t' read -r agent method skill_name; do
+        [[ -z "$agent" ]] && continue
+        [[ "$method" != "link" ]] && continue
+        agent_dir=$(get_agent_dir "$agent" "$HOME")
+        if /bin/rm -f "$agent_dir/$skill_name"; then
+            print_info "  ✓ 已删除游离链接: $skill_name @ $agent"
+        else
+            print_error "删除游离链接失败: $agent_dir/$skill_name"
+        fi
+    done <<< "$(scan_global_orphans)"
+}
+
 # 从配置创建全局符号链接/复制目录
 sync_from_config() {
     if [[ ! -f "$SKILLS_YAML" ]]; then
@@ -784,6 +810,9 @@ sync_from_config() {
         # 全局 scope = 以 $HOME 为 base，复用项目侧的逐 agent 物化逻辑
         _project_deploy_skill "$HOME" "$skill_name" "$skill_source" "$link_agents" "$copy_agents"
     done <<< "$skills"
+
+    # config 即真相：删除指向中央目录但 yaml 未声明的游离链接（对齐项目侧 --fix 行为）
+    sync_prune_orphans
 
     info_done "同步"
 
