@@ -1,7 +1,7 @@
 # asmgr
 
 **asmgr (agent-setting manager)** — `~/agent-settings` 中央配置仓库的命令行管家：统一管理 skills、subagents、
-项目局域清单与 Claude Code plugin/marketplace，横跨 cursor / claude-code / codex / gemini，一套 scope 模型
+项目局域清单与 Claude Code plugin/marketplace，横跨 cursor / claude-code / codex / gemini / opencode / pi / omp，一套 scope 模型
 （默认当前目录 / `-g` 全局 / `-p` 项目 / `--all`）。
 
 核心思路：所有 skill 实体只存一份在中央目录 `~/agent-settings/skills/`，各 agent 目录通过**符号链接**
@@ -48,9 +48,9 @@ scope 决定操作落在哪里、状态记到哪个文件：
 
 | scope | flag | 操作目标 | 记录到 |
 |-------|------|----------|--------|
-| 当前目录项目 | 默认（无 flag） | `./.{agent}/skills/` | `~/agent-settings/projects/<name>.yaml` |
-| 全局 | `-g` | `~/.{agent}/skills/` | `~/agent-settings/skills/skills.yaml` |
-| 指定项目 | `-p <dir>` | `<dir>/.{agent}/skills/` | `~/agent-settings/projects/<name>.yaml` |
+| 当前目录项目 | 默认（无 flag） | agent 对应项目 skills 目录（见下表） | `~/agent-settings/projects/<name>.yaml` |
+| 全局 | `-g` | agent 对应全局 skills 目录（见下表） | `~/agent-settings/skills/skills.yaml` |
+| 指定项目 | `-p <dir>` | agent 对应项目 skills 目录（见下表） | `~/agent-settings/projects/<name>.yaml` |
 | 全部 | `--all` | 全局 + 所有已登记项目 | 二者 |
 
 `--all` 仅 `list` / `status` / `sync --from-config` 支持。
@@ -67,6 +67,9 @@ scope 决定操作落在哪里、状态记到哪个文件：
 | claude-code | `~/.claude/skills/` | `<project>/.claude/skills/` |
 | codex | `~/.codex/skills/` | `<project>/.codex/skills/` |
 | gemini | `~/.gemini/skills/` | `<project>/.gemini/skills/` |
+| opencode | `~/.config/opencode/skills/` | `<project>/.opencode/skills/` |
+| pi | `~/.pi/agent/skills/` | `<project>/.pi/skills/` |
+| omp | `~/.omp/agent/skills/` | `<project>/.omp/skills/` |
 
 subagent（`-s`）固定走 claude-code，链接到 `.claude/agents/`（全局为 `~/.claude/agents/`）。
 
@@ -361,7 +364,7 @@ subagents:
 | `lib/plugin.sh` | Claude Code plugin/marketplace 与 `skills.yaml` 的 `claude_code` 段互转（仅全局 scope 触发） |
 
 **core.sh 的共享常量**：`SKILLS_DIR`（`~/agent-settings/skills`）、`SKILLS_YAML`、`AGENTS_DIR`（中央 subagents）、
-`PROJECTS_DIR`（项目清单目录）、`SUPPORTED_AGENTS`（`cursor claude-code codex gemini`）。
+`PROJECTS_DIR`（项目清单目录）、`SUPPORTED_AGENTS`（`cursor claude-code codex gemini opencode pi omp`）。
 （`CLAUDE_PLUGINS_DIR` 属 plugin 相关，定义在 `lib/plugin.sh`。）
 
 **scope 决定数据落点**——这是理解架构的关键：

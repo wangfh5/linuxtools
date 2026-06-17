@@ -211,12 +211,13 @@ copy_from_local() {
 }
 
 # 安装 skill 到指定 agents（统一 link/copy 逻辑）
-# 用法: install_to_agents <link|copy> <base_dir> <agents...>
+# 用法: install_to_agents <link|copy> <global|project> <base_dir> <agents...>
 # 输出变量: _installed_agents, _failed_agents
 install_to_agents() {
     local mode="$1"
-    local base_dir="$2"
-    shift 2
+    local scope="$2"
+    local base_dir="$3"
+    shift 3
     local agents=("$@")
 
     _installed_agents=()
@@ -242,7 +243,7 @@ install_to_agents() {
 
     for agent in "${agents[@]}"; do
         local agent_dir
-        if ! agent_dir=$(get_agent_dir "$agent" "$base_dir"); then
+        if ! agent_dir=$(get_agent_dir "$agent" "$base_dir" "$scope"); then
             print_error "不支持的 Agent: $agent"
             [[ "$mode" == "link" ]] && print_error "支持的 agents: $SUPPORTED_AGENTS"
             _failed_agents+=("$agent")

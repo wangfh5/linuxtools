@@ -20,7 +20,7 @@ sync-remote -m pull      # 从远程拉取
 `~/agent-settings` 中央配置仓库的命令行管家：统一管理 skills、subagents、项目局域清单与
 Claude Code plugin/marketplace。
 
-**核心特性**：中央存储 + 符号链接，跨 cursor/claude-code/codex/gemini，统一 scope 模型。
+**核心特性**：中央存储 + 符号链接，跨 cursor/claude-code/codex/gemini/opencode/pi/omp，统一 scope 模型。
 
 **依赖**: 需要安装 `yq` (https://github.com/mikefarah/yq)
 

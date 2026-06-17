@@ -226,14 +226,15 @@ unlink_subagent_from_project() {
     fi
 }
 
-# 内部：把一个 skill 的 link/copy agents 物化到项目目录（仿 sync_from_config 内层循环）
+# 内部：把一个 skill 的 link/copy agents 物化到目标目录（项目与全局共用）
 _project_deploy_skill() {
     local project_dir="$1" name="$2" skill_source="$3" link_agents="$4" copy_agents="$5"
+    local scope="${6:-project}"
     local agent agent_dir
 
     while IFS= read -r agent; do
         [[ -z "$agent" ]] && continue
-        agent_dir=$(get_agent_dir "$agent" "$project_dir" 2>/dev/null)
+        agent_dir=$(get_agent_dir "$agent" "$project_dir" "$scope" 2>/dev/null)
         if [[ -z "$agent_dir" ]]; then print_warn "不支持的 Agent: $agent"; continue; fi
         [[ ! -d "$agent_dir" ]] && /bin/mkdir -p "$agent_dir"
         mat_deploy_link "$skill_source" "$agent_dir" "$name" "$agent"
@@ -241,7 +242,7 @@ _project_deploy_skill() {
 
     while IFS= read -r agent; do
         [[ -z "$agent" ]] && continue
-        agent_dir=$(get_agent_dir "$agent" "$project_dir" 2>/dev/null)
+        agent_dir=$(get_agent_dir "$agent" "$project_dir" "$scope" 2>/dev/null)
         if [[ -z "$agent_dir" ]]; then print_warn "不支持的 Agent: $agent"; continue; fi
         [[ ! -d "$agent_dir" ]] && /bin/mkdir -p "$agent_dir"
         mat_deploy_copy "$skill_source" "$agent_dir" "$name" "$agent"
@@ -268,7 +269,7 @@ project_deploy_one() {
         local link_agents copy_agents
         link_agents=$(pm_get_entry_agents "$file" "skills" "$name" "agents_link")
         copy_agents=$(pm_get_entry_agents "$file" "skills" "$name" "agents_copy")
-        _project_deploy_skill "$project_dir" "$name" "$skill_source" "$link_agents" "$copy_agents"
+        _project_deploy_skill "$project_dir" "$name" "$skill_source" "$link_agents" "$copy_agents" "project"
     done <<< "$(pm_list_entries "$file" "skills")"
 
     while IFS= read -r name; do
@@ -300,7 +301,7 @@ project_scan_one() {
     local found=0 agent
 
     for agent in $SUPPORTED_AGENTS; do
-        local agent_dir; agent_dir=$(get_agent_dir "$agent" "$project_dir")
+        local agent_dir; agent_dir=$(get_agent_dir "$agent" "$project_dir" "project")
         [[ ! -d "$agent_dir" ]] && continue
         local method sname
         while IFS=$'\t' read -r method sname; do
@@ -354,7 +355,7 @@ _status_check_entry() {
     local issue=0 agent agent_dir link_path
     while IFS= read -r agent; do
         [[ -z "$agent" ]] && continue
-        agent_dir=$(get_agent_dir "$agent" "$base_dir" 2>/dev/null)
+        agent_dir=$(get_agent_dir "$agent" "$base_dir" "project" 2>/dev/null)
         [[ -z "$agent_dir" ]] && continue
         link_path="$agent_dir/$name"
         local cls state actual
@@ -402,7 +403,7 @@ _project_scan_orphans() {
     local issue=0 agent
 
     for agent in $SUPPORTED_AGENTS; do
-        local agent_dir; agent_dir=$(get_agent_dir "$agent" "$project_dir")
+        local agent_dir; agent_dir=$(get_agent_dir "$agent" "$project_dir" "project")
         [[ ! -d "$agent_dir" ]] && continue
         local method sname
         while IFS=$'\t' read -r method sname; do

@@ -103,11 +103,13 @@ normalize_base_dir() {
 
 # 获取 agent 目录的函数
 # 参数:
-#   $1 - agent 名称 (cursor, claude-code, codex, gemini)
+#   $1 - agent 名称 (cursor, claude-code, codex, gemini, opencode, pi, omp)
 #   $2 - base 目录 (可选，默认为 $HOME)
+#   $3 - scope 类型（global|project，默认 project）
 get_agent_dir() {
     local agent="$1"
     local base_dir="${2:-$HOME}"
+    local scope="${3:-project}"
 
     case "$agent" in
         cursor)
@@ -121,6 +123,27 @@ get_agent_dir() {
             ;;
         gemini)
             echo "$base_dir/.gemini/skills"
+            ;;
+        opencode)
+            if [[ "$scope" == "global" ]]; then
+                echo "$base_dir/.config/opencode/skills"
+            else
+                echo "$base_dir/.opencode/skills"
+            fi
+            ;;
+        pi)
+            if [[ "$scope" == "global" ]]; then
+                echo "$base_dir/.pi/agent/skills"
+            else
+                echo "$base_dir/.pi/skills"
+            fi
+            ;;
+        omp)
+            if [[ "$scope" == "global" ]]; then
+                echo "$base_dir/.omp/agent/skills"
+            else
+                echo "$base_dir/.omp/skills"
+            fi
             ;;
         *)
             return 1
@@ -173,7 +196,7 @@ require_project_dir_arg() {
 }
 
 # 支持的 agents 列表
-SUPPORTED_AGENTS="cursor claude-code codex gemini"
+SUPPORTED_AGENTS="cursor claude-code codex gemini opencode pi omp"
 
 # 颜色输出
 RED='\033[0;31m'

@@ -7,7 +7,8 @@
 #
 # 设计要点：
 #   - 完全沙箱化：每个用例用独立的临时 HOME。asmgr.sh 的所有中央路径
-#     （$HOME/agent-settings/skills|agents|projects、各 agent 的 ~/.{cursor,claude,codex,gemini}）
+#     （$HOME/agent-settings/skills|agents|projects、各 agent 的 ~/.{cursor,claude,codex,gemini}
+#      与 ~/.config/opencode、~/.pi/agent、~/.omp/agent）
 #     都从 $HOME 现场派生，所以换 HOME 就把整套工具重定向到沙箱，绝不碰真实 ~/agent-settings。
 #   - 自清理：单一 trap 删除根临时目录。
 #   - 结构化：每个能力一个 tc_* 用例函数；统一的 pass/fail/skip 计数；
@@ -97,9 +98,20 @@ new_home() {
     mkdir -p "$h/agent-settings/skills" "$h/agent-settings/agents" "$h/agent-settings/projects"
     echo "$h"
 }
-seed_agent_dirs() {      # 预建某 base 下四个 agent skills 目录 + .claude/agents，避免 add 的建目录交互
+seed_agent_dirs() {      # 预建某 base 下各 agent skills 目录 + .claude/agents，避免 add 的建目录交互
     local b="$1"
-    mkdir -p "$b/.cursor/skills" "$b/.claude/skills" "$b/.codex/skills" "$b/.gemini/skills" "$b/.claude/agents"
+    mkdir -p \
+        "$b/.cursor/skills" \
+        "$b/.claude/skills" \
+        "$b/.codex/skills" \
+        "$b/.gemini/skills" \
+        "$b/.opencode/skills" \
+        "$b/.config/opencode/skills" \
+        "$b/.pi/skills" \
+        "$b/.pi/agent/skills" \
+        "$b/.omp/skills" \
+        "$b/.omp/agent/skills" \
+        "$b/.claude/agents"
 }
 mk_src_skill() {         # 在外部目录造一个可被 add <path> 的 skill 源，回显其路径
     local dir="$1" name="$2"
@@ -300,6 +312,138 @@ tc_add_copy_global() {
     assert_real_dir "codex 为复制实体目录" "$H/.codex/skills/gamma"
     assert_eq "yaml agents_copy 含 codex" "codex" \
         "$(yq -r '.skills.gamma.agents_copy[]' "$H/agent-settings/skills/skills.yaml")"
+}
+
+tc_opencode_paths_status_and_remove() {
+    note "opencode：全局/项目路径 + status --fix + remove"
+    H=$(new_home); seed_agent_dirs "$H"
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    local src; src=$(mk_src_skill "$TMP_ROOT/opencode_src1" "omega")
+
+    run add "$src" -a opencode -g
+    assert_rc "opencode 全局 add 退出码 0" 0
+    assert_symlink "全局 opencode 链接建在 ~/.config/opencode/skills" "$H/.config/opencode/skills/omega"
+    assert_eq "yaml 记录 agents_link 含 opencode" "opencode" \
+        "$(yq -r '.skills.omega.agents_link[]' "$yaml" 2>/dev/null)"
+
+    rm -f "$H/.config/opencode/skills/omega"
+    run status -g
+    assert_contains "全局 status 命中 opencode MISSING" "$OUT" "omega -> opencode (配置有，链接不存在)"
+    run status --fix -g
+    assert_symlink "全局 opencode --fix 重建链接" "$H/.config/opencode/skills/omega"
+
+    local proj="$H/projop"; mkdir -p "$proj"; seed_agent_dirs "$proj"
+    local manifest; manifest=$(expected_manifest "$H" "$proj")
+    run add omega -a opencode -p "$proj"
+    assert_rc "opencode 项目 add 退出码 0" 0
+    assert_symlink "项目 opencode 链接建在 .opencode/skills" "$proj/.opencode/skills/omega"
+    assert_eq "项目清单登记 opencode link" "opencode" \
+        "$(yq -r '.skills.omega.agents_link[]' "$manifest" 2>/dev/null)"
+
+    rm -f "$proj/.opencode/skills/omega"
+    run status -p "$proj"
+    assert_contains "项目 status 命中 opencode MISSING" "$OUT" "omega -> opencode"
+    run status --fix -p "$proj"
+    assert_symlink "项目 opencode --fix 重建链接" "$proj/.opencode/skills/omega"
+
+    run remove omega -a opencode -g
+    assert_rc "opencode 全局 remove 退出码 0" 0
+    assert_absent "全局 opencode 链接已删" "$H/.config/opencode/skills/omega"
+    assert_eq "yaml 中 omega 全局记录已删" "null" \
+        "$(yq -r '.skills.omega // "null"' "$yaml" 2>/dev/null)"
+
+    run remove omega -a opencode -p "$proj"
+    assert_rc "opencode 项目 remove 退出码 0" 0
+    assert_absent "项目 opencode 链接已删" "$proj/.opencode/skills/omega"
+    assert_absent "项目清单已 prune" "$manifest"
+}
+
+tc_pi_paths_status_and_remove() {
+    note "pi：全局/项目路径 + status --fix + remove"
+    H=$(new_home); seed_agent_dirs "$H"
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    local src; src=$(mk_src_skill "$TMP_ROOT/pi_src1" "theta")
+
+    run add "$src" -a pi -g
+    assert_rc "pi 全局 add 退出码 0" 0
+    assert_symlink "全局 pi 链接建在 ~/.pi/agent/skills" "$H/.pi/agent/skills/theta"
+    assert_eq "yaml 记录 agents_link 含 pi" "pi" \
+        "$(yq -r '.skills.theta.agents_link[]' "$yaml" 2>/dev/null)"
+
+    rm -f "$H/.pi/agent/skills/theta"
+    run status -g
+    assert_contains "全局 status 命中 pi MISSING" "$OUT" "theta -> pi (配置有，链接不存在)"
+    run status --fix -g
+    assert_symlink "全局 pi --fix 重建链接" "$H/.pi/agent/skills/theta"
+
+    local proj="$H/projpi"; mkdir -p "$proj"; seed_agent_dirs "$proj"
+    local manifest; manifest=$(expected_manifest "$H" "$proj")
+    run add theta -a pi -p "$proj"
+    assert_rc "pi 项目 add 退出码 0" 0
+    assert_symlink "项目 pi 链接建在 .pi/skills" "$proj/.pi/skills/theta"
+    assert_eq "项目清单登记 pi link" "pi" \
+        "$(yq -r '.skills.theta.agents_link[]' "$manifest" 2>/dev/null)"
+
+    rm -f "$proj/.pi/skills/theta"
+    run status -p "$proj"
+    assert_contains "项目 status 命中 pi MISSING" "$OUT" "theta -> pi"
+    run status --fix -p "$proj"
+    assert_symlink "项目 pi --fix 重建链接" "$proj/.pi/skills/theta"
+
+    run remove theta -a pi -g
+    assert_rc "pi 全局 remove 退出码 0" 0
+    assert_absent "全局 pi 链接已删" "$H/.pi/agent/skills/theta"
+    assert_eq "yaml 中 theta 全局记录已删" "null" \
+        "$(yq -r '.skills.theta // "null"' "$yaml" 2>/dev/null)"
+
+    run remove theta -a pi -p "$proj"
+    assert_rc "pi 项目 remove 退出码 0" 0
+    assert_absent "项目 pi 链接已删" "$proj/.pi/skills/theta"
+    assert_absent "项目清单已 prune" "$manifest"
+}
+
+tc_omp_paths_status_and_remove() {
+    note "omp：全局/项目路径 + status --fix + remove"
+    H=$(new_home); seed_agent_dirs "$H"
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    local src; src=$(mk_src_skill "$TMP_ROOT/omp_src1" "iota")
+
+    run add "$src" -a omp -g
+    assert_rc "omp 全局 add 退出码 0" 0
+    assert_symlink "全局 omp 链接建在 ~/.omp/agent/skills" "$H/.omp/agent/skills/iota"
+    assert_eq "yaml 记录 agents_link 含 omp" "omp" \
+        "$(yq -r '.skills.iota.agents_link[]' "$yaml" 2>/dev/null)"
+
+    rm -f "$H/.omp/agent/skills/iota"
+    run status -g
+    assert_contains "全局 status 命中 omp MISSING" "$OUT" "iota -> omp (配置有，链接不存在)"
+    run status --fix -g
+    assert_symlink "全局 omp --fix 重建链接" "$H/.omp/agent/skills/iota"
+
+    local proj="$H/projomp"; mkdir -p "$proj"; seed_agent_dirs "$proj"
+    local manifest; manifest=$(expected_manifest "$H" "$proj")
+    run add iota -a omp -p "$proj"
+    assert_rc "omp 项目 add 退出码 0" 0
+    assert_symlink "项目 omp 链接建在 .omp/skills" "$proj/.omp/skills/iota"
+    assert_eq "项目清单登记 omp link" "omp" \
+        "$(yq -r '.skills.iota.agents_link[]' "$manifest" 2>/dev/null)"
+
+    rm -f "$proj/.omp/skills/iota"
+    run status -p "$proj"
+    assert_contains "项目 status 命中 omp MISSING" "$OUT" "iota -> omp"
+    run status --fix -p "$proj"
+    assert_symlink "项目 omp --fix 重建链接" "$proj/.omp/skills/iota"
+
+    run remove iota -a omp -g
+    assert_rc "omp 全局 remove 退出码 0" 0
+    assert_absent "全局 omp 链接已删" "$H/.omp/agent/skills/iota"
+    assert_eq "yaml 中 iota 全局记录已删" "null" \
+        "$(yq -r '.skills.iota // "null"' "$yaml" 2>/dev/null)"
+
+    run remove iota -a omp -p "$proj"
+    assert_rc "omp 项目 remove 退出码 0" 0
+    assert_absent "项目 omp 链接已删" "$proj/.omp/skills/iota"
+    assert_absent "项目清单已 prune" "$manifest"
 }
 
 tc_list_global_and_all() {
@@ -602,6 +746,102 @@ tc_sync_from_agents_global() {
         "$(yq -r '.skills.alpha.agents_link[]' "$yaml")"
     assert_eq "扫描识别出 copy（gamma 在 agents_copy）" "codex" \
         "$(yq -r '.skills.gamma.agents_copy[]' "$yaml")"
+}
+
+tc_opencode_sync_from_agents_and_config() {
+    note "opencode：sync --from-agents / --from-config（copy，含全局与项目）"
+    H=$(new_home); seed_agent_dirs "$H"
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    local proj="$H/projopsync"; mkdir -p "$proj"; seed_agent_dirs "$proj"
+    local manifest; manifest=$(expected_manifest "$H" "$proj")
+    mk_central_skill "$H" "sigma"
+
+    cp -r "$H/agent-settings/skills/sigma" "$H/.config/opencode/skills/sigma"
+    cp -r "$H/agent-settings/skills/sigma" "$proj/.opencode/skills/sigma"
+
+    run sync --from-agents -g
+    assert_rc "opencode 全局 from-agents 退出码 0" 0
+    assert_eq "全局 from-agents 识别 opencode copy" "opencode" \
+        "$(yq -r '.skills.sigma.agents_copy[]' "$yaml" 2>/dev/null)"
+
+    run sync --from-agents -p "$proj"
+    assert_rc "opencode 项目 from-agents 退出码 0" 0
+    assert_eq "项目 from-agents 识别 opencode copy" "opencode" \
+        "$(yq -r '.skills.sigma.agents_copy[]' "$manifest" 2>/dev/null)"
+
+    rm -rf "$H/.config/opencode/skills/sigma" "$proj/.opencode/skills/sigma"
+
+    run sync --from-config -g
+    assert_rc "opencode 全局 from-config 退出码 0" 0
+    assert_real_dir "全局 from-config 重建 opencode copy" "$H/.config/opencode/skills/sigma"
+
+    run sync --from-config -p "$proj"
+    assert_rc "opencode 项目 from-config 退出码 0" 0
+    assert_real_dir "项目 from-config 重建 opencode copy" "$proj/.opencode/skills/sigma"
+}
+
+tc_pi_sync_from_agents_and_config() {
+    note "pi：sync --from-agents / --from-config（copy，含全局与项目）"
+    H=$(new_home); seed_agent_dirs "$H"
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    local proj="$H/projpisync"; mkdir -p "$proj"; seed_agent_dirs "$proj"
+    local manifest; manifest=$(expected_manifest "$H" "$proj")
+    mk_central_skill "$H" "lambda"
+
+    cp -r "$H/agent-settings/skills/lambda" "$H/.pi/agent/skills/lambda"
+    cp -r "$H/agent-settings/skills/lambda" "$proj/.pi/skills/lambda"
+
+    run sync --from-agents -g
+    assert_rc "pi 全局 from-agents 退出码 0" 0
+    assert_eq "全局 from-agents 识别 pi copy" "pi" \
+        "$(yq -r '.skills.lambda.agents_copy[]' "$yaml" 2>/dev/null)"
+
+    run sync --from-agents -p "$proj"
+    assert_rc "pi 项目 from-agents 退出码 0" 0
+    assert_eq "项目 from-agents 识别 pi copy" "pi" \
+        "$(yq -r '.skills.lambda.agents_copy[]' "$manifest" 2>/dev/null)"
+
+    rm -rf "$H/.pi/agent/skills/lambda" "$proj/.pi/skills/lambda"
+
+    run sync --from-config -g
+    assert_rc "pi 全局 from-config 退出码 0" 0
+    assert_real_dir "全局 from-config 重建 pi copy" "$H/.pi/agent/skills/lambda"
+
+    run sync --from-config -p "$proj"
+    assert_rc "pi 项目 from-config 退出码 0" 0
+    assert_real_dir "项目 from-config 重建 pi copy" "$proj/.pi/skills/lambda"
+}
+
+tc_omp_sync_from_agents_and_config() {
+    note "omp：sync --from-agents / --from-config（copy，含全局与项目）"
+    H=$(new_home); seed_agent_dirs "$H"
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    local proj="$H/projompsync"; mkdir -p "$proj"; seed_agent_dirs "$proj"
+    local manifest; manifest=$(expected_manifest "$H" "$proj")
+    mk_central_skill "$H" "mu"
+
+    cp -r "$H/agent-settings/skills/mu" "$H/.omp/agent/skills/mu"
+    cp -r "$H/agent-settings/skills/mu" "$proj/.omp/skills/mu"
+
+    run sync --from-agents -g
+    assert_rc "omp 全局 from-agents 退出码 0" 0
+    assert_eq "全局 from-agents 识别 omp copy" "omp" \
+        "$(yq -r '.skills.mu.agents_copy[]' "$yaml" 2>/dev/null)"
+
+    run sync --from-agents -p "$proj"
+    assert_rc "omp 项目 from-agents 退出码 0" 0
+    assert_eq "项目 from-agents 识别 omp copy" "omp" \
+        "$(yq -r '.skills.mu.agents_copy[]' "$manifest" 2>/dev/null)"
+
+    rm -rf "$H/.omp/agent/skills/mu" "$proj/.omp/skills/mu"
+
+    run sync --from-config -g
+    assert_rc "omp 全局 from-config 退出码 0" 0
+    assert_real_dir "全局 from-config 重建 omp copy" "$H/.omp/agent/skills/mu"
+
+    run sync --from-config -p "$proj"
+    assert_rc "omp 项目 from-config 退出码 0" 0
+    assert_real_dir "项目 from-config 重建 omp copy" "$proj/.omp/skills/mu"
 }
 
 tc_sync_from_agents_project_migration() {
@@ -993,6 +1233,9 @@ tc_add_global_link_and_record
 tc_add_local_overwrite
 tc_link_to_copy_migration_and_field_order
 tc_add_copy_global
+tc_opencode_paths_status_and_remove
+tc_pi_paths_status_and_remove
+tc_omp_paths_status_and_remove
 tc_list_global_and_all
 tc_status_global_ok
 tc_status_global_missing_fix
@@ -1012,6 +1255,9 @@ tc_subagent_dir_and_md
 tc_subagent_global_no_record
 tc_subagent_disambiguation
 tc_sync_from_agents_global
+tc_opencode_sync_from_agents_and_config
+tc_pi_sync_from_agents_and_config
+tc_omp_sync_from_agents_and_config
 tc_sync_from_agents_project_migration
 tc_sync_from_config_global_idempotent
 tc_sync_from_config_prunes_orphans

@@ -2,7 +2,7 @@
 
 # asmgr — agent-settings 中央配置仓库的命令行管家
 # 统一管理 skills、subagents、项目局域清单与 Claude Code plugin/marketplace，
-# 跨 cursor / claude-code / codex / gemini，一套 scope 模型（默认 cwd / -g / -p / --all）。
+# 跨 cursor / claude-code / codex / gemini / opencode / pi / omp，一套 scope 模型（默认 cwd / -g / -p / --all）。
 
 # 确保 PATH 包含标准命令路径（避免用户环境 PATH 缺失导致的 command not found）
 # 同时包含 Homebrew 默认路径（Apple Silicon: /opt/homebrew/bin）。
@@ -69,14 +69,16 @@ add 命令参数:
                           (必须以 /, ./, ../ 开头，显式指定路径)
                         - Skill 名称: skill-creator (搜索中央目录)
 
-    -a <agents...>      指定要链接的 agents，支持: cursor, claude-code, codex, gemini
+    -a <agents...>      指定要链接的 agents，支持: cursor, claude-code, codex, gemini, opencode, pi, omp
                         可指定多个，用空格分隔；不指定则仅下载到中央目录
 
     -g, --global        全局安装（家目录）
-                        创建 ~/.cursor/skills/, ~/.claude/skills/, ~/.codex/skills/, ~/.gemini/skills/
+                        创建 ~/.cursor/skills/, ~/.claude/skills/, ~/.codex/skills/, ~/.gemini/skills/,
+                             ~/.config/opencode/skills/, ~/.pi/agent/skills/, ~/.omp/agent/skills/
 
     -p, --project <dir> 指定项目根目录（局域安装），默认为当前目录；不能与 -g 同用
-                        创建 <dir>/.cursor/skills/, <dir>/.claude/skills/, <dir>/.codex/skills/, <dir>/.gemini/skills/
+                        创建 <dir>/.cursor/skills/, <dir>/.claude/skills/, <dir>/.codex/skills/,
+                             <dir>/.gemini/skills/, <dir>/.opencode/skills/, <dir>/.pi/skills/, <dir>/.omp/skills/
 
     -c, --copy          复制模式（复制整个目录而非符号链接），适用于不支持符号链接的 agent
                         默认为符号链接模式
@@ -269,10 +271,12 @@ cmd_add() {
     # 创建符号链接或复制（传递 base_dir）
     local installed_agents=()
     local failed_agents=()
+    local install_scope="project"
+    [[ "$is_global" == true ]] && install_scope="global"
     if [[ "$use_copy" == true ]]; then
-        copy_to_agents "$base_dir" "${agents[@]}"
+        copy_to_agents "$install_scope" "$base_dir" "${agents[@]}"
     else
-        create_symlinks "$base_dir" "${agents[@]}"
+        create_symlinks "$install_scope" "$base_dir" "${agents[@]}"
     fi
     installed_agents=("${_installed_agents[@]}")
     failed_agents=("${_failed_agents[@]}")
@@ -368,7 +372,7 @@ _list_agents_status() {
     local agent agent_dir link_path cls state actual
     while IFS= read -r agent; do
         [[ -z "$agent" ]] && continue
-        agent_dir=$(get_agent_dir "$agent" "$HOME" 2>/dev/null)
+        agent_dir=$(get_agent_dir "$agent" "$HOME" "global" 2>/dev/null)
         link_path="$agent_dir/$skill_name"
         cls=$(mat_classify "$link_path" "$src" "$method")
         IFS=$'\t' read -r state actual <<< "$cls"
@@ -455,7 +459,7 @@ _status_check_global_entry() {
     local issue=0 agent agent_dir link_path cls state actual
     while IFS= read -r agent; do
         [[ -z "$agent" ]] && continue
-        agent_dir=$(get_agent_dir "$agent" "$HOME" 2>/dev/null)
+        agent_dir=$(get_agent_dir "$agent" "$HOME" "global" 2>/dev/null)
         [[ -z "$agent_dir" ]] && continue
         link_path="$agent_dir/$skill_name"
         cls=$(mat_classify "$link_path" "$skill_source" "$method")
@@ -547,7 +551,7 @@ _skill_orphan_at() {
 scan_global_orphans() {
     local agent agent_dir method skill_name
     for agent in $SUPPORTED_AGENTS; do
-        agent_dir=$(get_agent_dir "$agent" "$HOME")
+        agent_dir=$(get_agent_dir "$agent" "$HOME" "global")
         [[ ! -d "$agent_dir" ]] && continue
         while IFS=$'\t' read -r method skill_name; do
             [[ -z "$method" ]] && continue
@@ -728,7 +732,7 @@ EOF
     # 扫描所有 agent 目录（仅全局）
     for agent in $SUPPORTED_AGENTS; do
         local agent_dir
-        agent_dir=$(get_agent_dir "$agent")
+        agent_dir=$(get_agent_dir "$agent" "$HOME" "global")
 
         [[ ! -d "$agent_dir" ]] && continue
 
@@ -766,7 +770,7 @@ sync_prune_orphans() {
     while IFS=$'\t' read -r agent method skill_name; do
         [[ -z "$agent" ]] && continue
         [[ "$method" != "link" ]] && continue
-        agent_dir=$(get_agent_dir "$agent" "$HOME")
+        agent_dir=$(get_agent_dir "$agent" "$HOME" "global")
         if /bin/rm -f "$agent_dir/$skill_name"; then
             print_info "  ✓ 已删除游离链接: $skill_name @ $agent"
         else
@@ -807,8 +811,8 @@ sync_from_config() {
         link_agents=$(get_skill_agents_link "$skill_name")
         copy_agents=$(get_skill_agents_copy "$skill_name")
 
-        # 全局 scope = 以 $HOME 为 base，复用项目侧的逐 agent 物化逻辑
-        _project_deploy_skill "$HOME" "$skill_name" "$skill_source" "$link_agents" "$copy_agents"
+        # 全局 scope = 以 $HOME 为 base，复用共享物化逻辑
+        _project_deploy_skill "$HOME" "$skill_name" "$skill_source" "$link_agents" "$copy_agents" "global"
     done <<< "$skills"
 
     # config 即真相：删除指向中央目录但 yaml 未声明的游离链接（对齐项目侧 --fix 行为）
@@ -860,7 +864,7 @@ remove_skill_completely() {
 
     for agent in $SUPPORTED_AGENTS; do
         local agent_dir link_path
-        agent_dir=$(get_agent_dir "$agent" "$HOME")
+        agent_dir=$(get_agent_dir "$agent" "$HOME" "global")
         link_path="$agent_dir/$skill_name"
         if [[ -e "$link_path" || -L "$link_path" ]]; then
             if /bin/rm -rf "$link_path"; then
@@ -887,7 +891,7 @@ remove_skill_completely() {
 }
 
 # 从指定 agents 移除 skill 安装
-# 用法: remove_skill_from_agents <skill_name> <base_dir> <mode:global|local> <agents...>
+# 用法: remove_skill_from_agents <skill_name> <base_dir> <mode:global|project> <agents...>
 remove_skill_from_agents() {
     local skill_name="$1"
     local base_dir="$2"
@@ -897,7 +901,7 @@ remove_skill_from_agents() {
 
     for agent in "${agents[@]}"; do
         local agent_dir
-        agent_dir=$(get_agent_dir "$agent" "$base_dir" 2>/dev/null)
+        agent_dir=$(get_agent_dir "$agent" "$base_dir" "$mode" 2>/dev/null)
         if [[ -z "$agent_dir" ]]; then
             print_error "不支持的 Agent: $agent"
             continue
@@ -940,7 +944,7 @@ remove_skill_from_agents() {
                 remove_agent_from_skill_field "$skill_name" "$field" "$agent"
                 remove_skill_if_empty "$skill_name"
             fi
-        elif [[ "$mode" == "local" ]]; then
+        elif [[ "$mode" == "project" ]]; then
             local manifest
             manifest="$(project_manifest_file "$base_dir")"
             if [[ -f "$manifest" ]]; then
@@ -952,7 +956,7 @@ remove_skill_from_agents() {
         fi
     done
 
-    if [[ "$mode" == "local" ]]; then
+    if [[ "$mode" == "project" ]]; then
         local manifest
         manifest="$(project_manifest_file "$base_dir")"
         [[ -f "$manifest" ]] && pm_prune_project "$manifest" && print_info "项目清单已空，已删除: $manifest"
@@ -1052,7 +1056,7 @@ cmd_remove() {
         if [[ "$is_global" == true ]]; then
             mode="global"
         else
-            mode="local"
+            mode="project"
         fi
 
         remove_skill_from_agents "$skill_name" "$base_dir" "$mode" "${agents[@]}"
