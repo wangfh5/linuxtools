@@ -146,8 +146,10 @@ update_skills_yaml() {
         "$(get_skill_agents_field "$skill_name" "agents_copy")" \
         "$method" "${agents[@]}"
 
-    # 整块重写，保证字段顺序：agents_link、agents_copy、source、added_at
-    yq -i ".skills.\"$skill_name\" = {\"agents_link\": $_link_yaml, \"agents_copy\": $_copy_yaml, \"source\": \"$final_source\", \"added_at\": \"$final_added_at\"}" "$SKILLS_YAML"
+    # 整块重写，保证字段顺序：agents_link、agents_copy、source、added_at；
+    # source/added_at 来自外部输入或系统时间，必须经 strenv() 进入 yq，避免表达式注入。
+    SOURCE_VALUE="$final_source" ADDED_AT_VALUE="$final_added_at" \
+        yq -i ".skills.\"$skill_name\" = {\"agents_link\": $_link_yaml, \"agents_copy\": $_copy_yaml, \"source\": strenv(SOURCE_VALUE), \"added_at\": strenv(ADDED_AT_VALUE)}" "$SKILLS_YAML"
 }
 
 # 从 skills.yaml 读取 skill 的 link/copy agents 列表
@@ -183,14 +185,17 @@ remove_agent_from_skill_field() {
     yq -i ".skills.\"$skill_name\".$field -= [\"$agent\"]" "$SKILLS_YAML"
 }
 
-remove_skill_if_empty() {
+# 保留无全局安装的 skill 记录：agents_link/agents_copy 为空时，source/added_at
+# 仍是跨机器恢复时唯一可追溯的来源信息。完全删除只由 remove_skill_from_yaml 执行。
+preserve_skill_install_entry_if_empty() {
     local skill_name="$1"
     [[ ! -f "$SKILLS_YAML" ]] && return 0
+    skill_exists_in_yaml "$skill_name" || return 0
     local remaining_link remaining_copy
     remaining_link=$(yq -r ".skills.\"$skill_name\".agents_link // [] | length" "$SKILLS_YAML" 2>/dev/null)
-    remaining_copy=$(yq -r ".skills.\"$skill_name\".agents_copy | length" "$SKILLS_YAML" 2>/dev/null)
+    remaining_copy=$(yq -r ".skills.\"$skill_name\".agents_copy // [] | length" "$SKILLS_YAML" 2>/dev/null)
     if [[ "${remaining_link:-0}" == "0" && "${remaining_copy:-0}" == "0" ]]; then
-        yq -i "del(.skills.\"$skill_name\")" "$SKILLS_YAML"
+        yq -i ".skills.\"$skill_name\".agents_link = [] | .skills.\"$skill_name\".agents_copy = []" "$SKILLS_YAML"
     fi
 }
 
@@ -198,6 +203,16 @@ remove_skill_if_empty() {
 get_all_skills() {
     [[ ! -f "$SKILLS_YAML" ]] && return 1
     yq -r '.skills | keys | .[]' "$SKILLS_YAML" 2>/dev/null
+}
+
+# 从 agents 实态重扫前只清空安装列表，不抹掉 source/added_at。
+reset_all_skill_install_entries() {
+    [[ ! -f "$SKILLS_YAML" ]] && return 0
+    local skill_name
+    while IFS= read -r skill_name; do
+        [[ -z "$skill_name" ]] && continue
+        yq -i ".skills.\"$skill_name\".agents_link = [] | .skills.\"$skill_name\".agents_copy = []" "$SKILLS_YAML"
+    done <<< "$(get_all_skills)"
 }
 
 # 从 skills.yaml 完全移除 skill 记录
