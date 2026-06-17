@@ -735,7 +735,7 @@ sync_from_agents() {
         while IFS=$'\t' read -r method skill_name; do
             [[ -z "$method" ]] && continue
             print_info "发现: $skill_name -> $agent ($method)"
-            update_skills_yaml "$skill_name" "unknown" 1 "$method" "$agent"
+            update_skills_yaml "$skill_name" "unknown" 0 "$method" "$agent"
             found_any=1
         done <<< "$(mat_scan_central_links "$agent_dir" "$SKILLS_DIR" 1)"
     done
