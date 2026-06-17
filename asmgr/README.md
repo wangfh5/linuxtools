@@ -226,6 +226,8 @@ asmgr sync --from-config [-g | --all]
 1. **首次使用**：已有安装但没有配置，`sync --from-agents` 扫描并生成配置。
 2. **新机器部署**：clone agent-settings 后，`sync --from-config --all` 自动重建全局 + 所有项目的链接/副本。
 
+全局 `sync --from-agents -g` 只让 `agents_link` / `agents_copy` 跟随当前全局安装状态，不覆盖已有 `source` / `added_at` 元数据。
+
 ### remove — 移除
 
 **完全移除**（删除中央目录 + 所有全局安装 + `skills.yaml` 记录，执行前确认）：
@@ -242,6 +244,8 @@ asmgr remove skill-creator -a cursor -p ~/projects/foo  # 从指定项目移除
 asmgr remove skill-creator -a cursor                    # 从当前目录项目移除
 asmgr remove paper-writing-mentor -s                    # 移除 subagent 链接 + 更新清单
 ```
+
+全局部分移除清空最后一个 agent 后，会在 `skills.yaml` 保留该 skill 记录及其 `source` / `added_at`；只有 `asmgr remove <skill>` 完全移除会删除记录。
 
 ### Claude Code plugin / marketplace
 
@@ -286,7 +290,15 @@ skills:
     agents_copy: [codex]                  # 以复制安装的 agents
     source: https://github.com/anthropics/skills/tree/main/skills/skill-creator
     added_at: "2026-02-03T23:22:36+08:00" # 本地时区，最近一次 add 的时间
+
+  paper-writing-mentor:
+    agents_link: []
+    agents_copy: []
+    source: https://github.com/example/skills/tree/main/paper-writing-mentor
+    added_at: "2026-02-03T23:22:36+08:00"
 ```
+
+`agents_link: []` / `agents_copy: []` 是合法状态，表示该 skill 已注册但当前没有全局安装，`source` 仍可用于后续恢复或重新安装。
 
 当全局 `sync --from-agents -g` 在 `claude` CLI 可用时导入 plugin/marketplace，会新增 `claude_code` 段
 （是否带 plugin 数据看该段是否存在）：

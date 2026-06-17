@@ -714,14 +714,9 @@ cmd_sync() {
 sync_from_agents() {
     print_info "从 agents 安装状态（link/copy）重建配置文件..."
 
-    # 初始化空的配置文件
-    /bin/mkdir -p "$SKILLS_DIR"
-    cat > "$SKILLS_YAML" << 'EOF'
-# Skill installation registry
-# Auto-managed by asmgr, can be manually edited
-
-skills: {}
-EOF
+    # 初始化配置文件；重扫只让安装列表跟随实态，不抹掉已有 source/added_at。
+    init_skills_yaml
+    reset_all_skill_install_entries
 
     local found_any=0
 
@@ -938,7 +933,7 @@ remove_skill_from_agents() {
                 local field
                 field=$(agents_field_for_method "$actual_method")
                 remove_agent_from_skill_field "$skill_name" "$field" "$agent"
-                remove_skill_if_empty "$skill_name"
+                preserve_skill_install_entry_if_empty "$skill_name"
             fi
         elif [[ "$mode" == "local" ]]; then
             local manifest

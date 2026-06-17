@@ -604,6 +604,30 @@ tc_sync_from_agents_global() {
         "$(yq -r '.skills.gamma.agents_copy[]' "$yaml")"
 }
 
+tc_sync_from_agents_global_preserves_source_only() {
+    note "sync --from-agents -g：保留无全局安装的 source-only skill 记录"
+    H=$(new_home); seed_agent_dirs "$H"
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    mk_central_skill "$H" "alpha"
+    cat > "$yaml" <<'YAML'
+skills:
+  alpha:
+    agents_link: []
+    agents_copy: []
+    source: https://example.com/skills/alpha
+    added_at: "2026-01-01T00:00:00+08:00"
+YAML
+
+    run sync --from-agents -g
+    assert_rc "sync --from-agents -g 退出码 0" 0
+    assert_eq "source-only 记录仍存在" "https://example.com/skills/alpha" \
+        "$(yq -r '.skills.alpha.source' "$yaml")"
+    assert_eq "source-only agents_link 仍为空" "0" \
+        "$(yq -r '.skills.alpha.agents_link | length' "$yaml")"
+    assert_eq "source-only agents_copy 仍为空" "0" \
+        "$(yq -r '.skills.alpha.agents_copy | length' "$yaml")"
+}
+
 tc_sync_from_agents_project_migration() {
     note "sync --from-agents (cwd / -p)：扫描项目现有链接 → 写清单（迁移）"
     H=$(new_home)
@@ -771,19 +795,35 @@ tc_remove_partial_and_prune() {
 }
 
 tc_remove_global_partial() {
-    note "remove -a -g：从全局移除并更新 yaml（link 与 copy 各一）"
+    note "remove -a -g：从全局移除安装但保留 yaml 来源元数据"
     H=$(new_home); seed_agent_dirs "$H"
     local yaml="$H/agent-settings/skills/skills.yaml"
-    mk_central_skill "$H" "alpha"
-    run add alpha -a cursor -g          # link
-    run add alpha -a codex -g -c        # copy
+    local src; src=$(mk_src_skill "$TMP_ROOT/rm_src" "alpha")
+    run add "$src" -a cursor -g          # link，记录可追溯 source
+    run add alpha -a codex -g -c         # copy，按名称安装不得覆盖 source 为 unknown
 
-    run remove alpha -a cursor -g       # 删 link，无需确认
+    run remove alpha -a cursor -g        # 删 link，无需确认
     assert_absent "全局 cursor 链接已删" "$H/.cursor/skills/alpha"
-    runc remove alpha -a codex -g       # 删 copy 目录，需确认
+    runc remove alpha -a codex -g        # 删 copy 目录，需确认
     assert_absent "全局 codex copy 已删" "$H/.codex/skills/alpha"
-    assert_eq "yaml 记录已随之清空" "null" \
-        "$(yq -r '.skills.alpha // "null"' "$yaml")"
+    assert_eq "yaml 记录仍保留" "true" \
+        "$(yq -r '.skills | has("alpha")' "$yaml")"
+    assert_eq "yaml agents_link 已清空" "0" \
+        "$(yq -r '.skills.alpha.agents_link | length' "$yaml")"
+    assert_eq "yaml agents_copy 已清空" "0" \
+        "$(yq -r '.skills.alpha.agents_copy | length' "$yaml")"
+    assert_eq "yaml source 未丢失" "local:$src" \
+        "$(yq -r '.skills.alpha.source' "$yaml")"
+    run sync --from-agents -g
+    assert_rc "无安装时 sync --from-agents 仍成功" 0
+    assert_eq "重扫后 yaml source 仍保留" "local:$src" \
+        "$(yq -r '.skills.alpha.source' "$yaml")"
+
+    run add alpha -a gemini -g
+    assert_rc "按名称重新安装退出码 0" 0
+    assert_symlink "全局 gemini 链接已重建" "$H/.gemini/skills/alpha"
+    assert_eq "重新安装后 source 仍不变 unknown" "local:$src" \
+        "$(yq -r '.skills.alpha.source' "$yaml")"
 }
 
 tc_remove_complete() {
@@ -1012,6 +1052,7 @@ tc_subagent_dir_and_md
 tc_subagent_global_no_record
 tc_subagent_disambiguation
 tc_sync_from_agents_global
+tc_sync_from_agents_global_preserves_source_only
 tc_sync_from_agents_project_migration
 tc_sync_from_config_global_idempotent
 tc_sync_from_config_prunes_orphans
