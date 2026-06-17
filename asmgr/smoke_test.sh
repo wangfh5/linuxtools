@@ -86,6 +86,16 @@ assert_rc_nonzero() {    # <desc>
     if [[ "$RC" != "0" ]]; then pass "$1 (rc=$RC)"; else fail "$1 (期望非零 rc)"; dump "$OUT"; fi
 }
 
+assert_skill_record_empty_agents() {  # <desc-prefix> <yaml> <skill>
+    local desc="$1" yaml="$2" skill="$3"
+    assert_eq "$desc 记录仍保留" "true" \
+        "$(yq -r ".skills | has(\"$skill\")" "$yaml")"
+    assert_eq "$desc agents_link 已清空" "0" \
+        "$(yq -r ".skills.\"$skill\".agents_link | length" "$yaml")"
+    assert_eq "$desc agents_copy 已清空" "0" \
+        "$(yq -r ".skills.\"$skill\".agents_copy | length" "$yaml")"
+}
+
 # ───────────────────────────── 调用封装 ─────────────────────────────
 # H = 当前用例的沙箱 HOME。OUT/RC = 最近一次调用的输出/退出码。
 H=""
@@ -230,6 +240,18 @@ tc_add_global_link_and_record() {
     assert_symlink "全局 gemini 链接" "$H/.gemini/skills/alpha"
     assert_symlink "全局 claude-code 链接" "$H/.claude/skills/alpha"
     assert_contains "add 完成消息" "$OUT" "添加完成"
+}
+
+tc_add_global_source_quotes_strenv() {
+    note "add -g：source 含双引号时通过 strenv 安全写入 yaml"
+    H=$(new_home); seed_agent_dirs "$H"
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    local src; src=$(mk_src_skill "$TMP_ROOT/src\"quoted" "quote-source")
+
+    run add "$src" -a cursor -g
+    assert_rc "含双引号 source add 退出码 0" 0
+    assert_eq "含双引号 source 原样写入 yaml" "local:$src" \
+        "$(yq -r '.skills."quote-source".source' "$yaml")"
 }
 
 tc_add_local_overwrite() {
@@ -605,10 +627,12 @@ tc_sync_from_agents_global() {
 }
 
 tc_sync_from_agents_global_preserves_source_only() {
-    note "sync --from-agents -g：保留无全局安装的 source-only skill 记录"
+    note "sync --from-agents -g：保留无全局安装和已安装 skill 的 source/added_at"
     H=$(new_home); seed_agent_dirs "$H"
     local yaml="$H/agent-settings/skills/skills.yaml"
     mk_central_skill "$H" "alpha"
+    mk_central_skill "$H" "beta"
+    ln -s "$H/agent-settings/skills/beta" "$H/.cursor/skills/beta"
     cat > "$yaml" <<'YAML'
 skills:
   alpha:
@@ -616,16 +640,26 @@ skills:
     agents_copy: []
     source: https://example.com/skills/alpha
     added_at: "2026-01-01T00:00:00+08:00"
+  beta:
+    agents_link: [gemini]
+    agents_copy: []
+    source: https://example.com/skills/beta
+    added_at: "2026-01-01T00:00:00+08:00"
 YAML
 
     run sync --from-agents -g
     assert_rc "sync --from-agents -g 退出码 0" 0
-    assert_eq "source-only 记录仍存在" "https://example.com/skills/alpha" \
+    assert_skill_record_empty_agents "source-only" "$yaml" "alpha"
+    assert_eq "source-only 记录 source 仍存在" "https://example.com/skills/alpha" \
         "$(yq -r '.skills.alpha.source' "$yaml")"
-    assert_eq "source-only agents_link 仍为空" "0" \
-        "$(yq -r '.skills.alpha.agents_link | length' "$yaml")"
-    assert_eq "source-only agents_copy 仍为空" "0" \
-        "$(yq -r '.skills.alpha.agents_copy | length' "$yaml")"
+    assert_eq "source-only added_at 仍不变" "2026-01-01T00:00:00+08:00" \
+        "$(yq -r '.skills.alpha.added_at' "$yaml")"
+    assert_eq "已安装 skill agents_link 跟随实态" "cursor" \
+        "$(yq -r '.skills.beta.agents_link[]' "$yaml")"
+    assert_eq "已安装 skill source 仍不变" "https://example.com/skills/beta" \
+        "$(yq -r '.skills.beta.source' "$yaml")"
+    assert_eq "已安装 skill added_at 仍不变" "2026-01-01T00:00:00+08:00" \
+        "$(yq -r '.skills.beta.added_at' "$yaml")"
 }
 
 tc_sync_from_agents_project_migration() {
@@ -806,12 +840,7 @@ tc_remove_global_partial() {
     assert_absent "全局 cursor 链接已删" "$H/.cursor/skills/alpha"
     runc remove alpha -a codex -g        # 删 copy 目录，需确认
     assert_absent "全局 codex copy 已删" "$H/.codex/skills/alpha"
-    assert_eq "yaml 记录仍保留" "true" \
-        "$(yq -r '.skills | has("alpha")' "$yaml")"
-    assert_eq "yaml agents_link 已清空" "0" \
-        "$(yq -r '.skills.alpha.agents_link | length' "$yaml")"
-    assert_eq "yaml agents_copy 已清空" "0" \
-        "$(yq -r '.skills.alpha.agents_copy | length' "$yaml")"
+    assert_skill_record_empty_agents "yaml" "$yaml" "alpha"
     assert_eq "yaml source 未丢失" "local:$src" \
         "$(yq -r '.skills.alpha.source' "$yaml")"
     run sync --from-agents -g
@@ -1030,6 +1059,7 @@ tc_sync_all_exit_folds_global() {
 # ════════════════════════════ 运行 ════════════════════════════
 tc_help_and_deps
 tc_add_global_link_and_record
+tc_add_global_source_quotes_strenv
 tc_add_local_overwrite
 tc_link_to_copy_migration_and_field_order
 tc_add_copy_global
