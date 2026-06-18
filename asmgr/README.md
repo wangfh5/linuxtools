@@ -233,7 +233,7 @@ asmgr sync --from-config [-g | --all]
 
 ### remove — 移除
 
-**完全移除**（删除中央目录 + 所有全局安装 + `skills.yaml` 记录，执行前确认）：
+**完全移除**（删除中央目录 + 所有全局安装 + `skills.yaml` 整块记录，执行前确认）：
 
 ```bash
 asmgr remove skill-creator
@@ -247,6 +247,8 @@ asmgr remove skill-creator -a cursor -p ~/projects/foo  # 从指定项目移除
 asmgr remove skill-creator -a cursor                    # 从当前目录项目移除
 asmgr remove paper-writing-mentor -s                    # 移除 subagent 链接 + 更新清单
 ```
+
+Skill remove 按中央目录或目标 agent 安装目录中的已存在名称精确匹配，不接收路径；补全带出的尾斜杠需要删掉。
 
 全局部分移除清空最后一个 agent 后，会在 `skills.yaml` 保留该 skill 记录及其 `source` / `added_at`；只有 `asmgr remove <skill>` 完全移除会删除记录。
 

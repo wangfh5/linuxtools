@@ -89,6 +89,7 @@ add 命令参数:
     注意: 默认是当前目录项目安装并写入项目清单；用 -g 才是全局安装
 
 remove 命令参数:
+    <skill>             Skill remove 按已存在的 skill/install 名称精确匹配，不接收路径
     -a <agents...>      指定要移除的 agents
     -s, --subagent      移除 subagent（从 .claude/agents 解链 + 更新清单）
     -g, --global        从全局安装移除
@@ -148,8 +149,10 @@ Claude Code plugins: $CLAUDE_PLUGINS_DIR
 EOF
 }
 
+# ---------------------------------------------------------------------------- #
+#                             Add skills/subagents                             #
+# ---------------------------------------------------------------------------- #
 
-# 添加 skill 命令
 cmd_add() {
     local source=""
     local agents=()
@@ -205,7 +208,13 @@ cmd_add() {
         esac
     done
 
-    # 解析 scope → base 目录（含 -g/-p 互斥与 -p 存在性校验）
+    validate_scope_flags "$is_global" "$project_dir" || return 1
+
+    if [[ "$is_subagent" != true ]]; then
+        validate_agents "${agents[@]}" || return 1
+    fi
+
+    # 解析 scope → base 目录（含 -p 存在性校验）
     resolve_base_dir "$is_global" "$project_dir" || return 1
     local base_dir="$RESOLVED_BASE_DIR"
 
@@ -316,6 +325,10 @@ cmd_add() {
     info_done "添加" "$SKILL_NAME"
     return 0
 }
+
+# ---------------------------------------------------------------------------- #
+#                             List skills/subagents                            #
+# ---------------------------------------------------------------------------- #
 
 # 当前项目清单的列出动作（带 cwd 专属表头），供 run_on_cwd_manifest 调用
 _list_cwd_one() {
@@ -451,6 +464,9 @@ list_global() {
     done <<< "$skills"
 }
 
+# ---------------------------------------------------------------------------- #
+#                           Status: consistency check                          #
+# ---------------------------------------------------------------------------- #
 # 检查配置与实际全局链接/复制的一致性
 # 检查某 skill 在一组 agents 下、某 method（link|copy）的全局安装一致性（返回 0=全 OK, 1=有问题）。
 # 全局侧的逐条检查器，对应 project.sh 的 _status_check_entry（消息/缩进/修复命令各自独立）。
@@ -660,6 +676,10 @@ status_global() {
     return $has_issues
 }
 
+# ---------------------------------------------------------------------------- #
+#                            Sync: actual <-> config                           #
+# ---------------------------------------------------------------------------- #
+
 # 同步命令
 cmd_sync() {
     local mode="" scope="cwd" project_dir=""
@@ -828,7 +848,52 @@ sync_from_config() {
     fi
 }
 
-# 移除 skill 命令
+# ---------------------------------------------------------------------------- #
+#                            Remove skills/subagents                           #
+# ---------------------------------------------------------------------------- #
+
+remove_child_dir_exists_exact() {
+    local dir="$1" name="$2" path
+    [[ -n "$name" && -d "$dir" ]] || return 1
+    for path in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+        [[ -d "$path" ]] || continue
+        [[ "${path##*/}" == "$name" ]] && return 0
+    done
+    return 1
+}
+
+remove_agent_install_exists_exact() {
+    local name="$1" base_dir="$2" mode="$3"
+    shift 3
+    [[ -n "$name" ]] || return 1
+
+    local agent agent_dir path
+    for agent in "$@"; do
+        agent_dir=$(get_agent_dir "$agent" "$base_dir" "$mode" 2>/dev/null) || continue
+        [[ -d "$agent_dir" ]] || continue
+        for path in "$agent_dir"/* "$agent_dir"/.[!.]* "$agent_dir"/..?*; do
+            [[ -L "$path" || -d "$path" ]] || continue
+            [[ "${path##*/}" == "$name" ]] && return 0
+        done
+    done
+    return 1
+}
+
+resolve_complete_remove_skill_name() {
+    local name="$1"
+    remove_child_dir_exists_exact "$SKILLS_DIR" "$name" && return 0
+    print_error "未找到 Skill '$name'"
+    return 1
+}
+
+resolve_partial_remove_skill_name() {
+    local name="$1" base_dir="$2" mode="$3"
+    shift 3
+    remove_agent_install_exists_exact "$name" "$base_dir" "$mode" "$@" && return 0
+    print_error "未找到 Skill '$name'"
+    return 1
+}
+
 # 完全移除 skill（中央目录 + 所有全局安装 + 配置记录）
 remove_skill_completely() {
     local skill_name="$1"
@@ -1009,15 +1074,20 @@ cmd_remove() {
         esac
     done
 
-    if [[ "$is_global" == true && -n "$project_dir" ]]; then
-        print_error "-g 和 -p 参数不能同时使用"
-        return 1
+    validate_scope_flags "$is_global" "$project_dir" || return 1
+
+    if [[ "$is_subagent" != true ]]; then
+        validate_agents "${agents[@]}" || return 1
+    fi
+
+    local base_dir=""
+    if [[ "$is_subagent" == true || ${#agents[@]} -gt 0 ]]; then
+        resolve_base_dir "$is_global" "$project_dir" || return 1
+        base_dir="$RESOLVED_BASE_DIR"
     fi
 
     # subagent 分支：从 .claude/agents 解链 + 更新项目清单 subagents 段
     if [[ "$is_subagent" == true ]]; then
-        resolve_base_dir "$is_global" "$project_dir" || return 1
-        local base_dir="$RESOLVED_BASE_DIR"
         local sub_name
         sub_name=$(resolve_subagent_name "$skill_name") || sub_name="$skill_name"
         unlink_subagent_from_project "$base_dir" "$sub_name"
@@ -1035,10 +1105,18 @@ cmd_remove() {
     fi
 
     if [[ ${#agents[@]} -eq 0 ]]; then
+        resolve_complete_remove_skill_name "$skill_name" || return 1
         remove_skill_completely "$skill_name"
     else
-        resolve_base_dir "$is_global" "$project_dir" || return 1
-        local base_dir="$RESOLVED_BASE_DIR"
+        local mode
+        if [[ "$is_global" == true ]]; then
+            mode="global"
+        else
+            mode="project"
+        fi
+
+        resolve_partial_remove_skill_name "$skill_name" "$base_dir" "$mode" "${agents[@]}" || return 1
+
         if [[ "$is_global" == true ]]; then
             print_info "从全局安装移除 Skill: $skill_name"
         elif [[ -n "$project_dir" ]]; then
@@ -1047,19 +1125,14 @@ cmd_remove() {
             print_info "从当前目录移除 Skill: $skill_name"
         fi
 
-        local mode
-        if [[ "$is_global" == true ]]; then
-            mode="global"
-        else
-            mode="project"
-        fi
-
         remove_skill_from_agents "$skill_name" "$base_dir" "$mode" "${agents[@]}"
     fi
 }
 
 
-# 主函数
+# ---------------------------------------------------------------------------- #
+#                                main function                                 #
+# ---------------------------------------------------------------------------- #
 main() {
     if [[ $# -eq 0 ]]; then
         show_help

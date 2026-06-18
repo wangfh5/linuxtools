@@ -164,13 +164,19 @@ get_subagent_target_dir() {
 # 结果写入全局 RESOLVED_BASE_DIR（沿用本仓库 _merged_agents 式的输出变量约定，
 # 因为 print_error 走 stdout、无法用命令替换回传）。-g/-p 互斥或 -p 目录不存在则报错返回 1。
 # 用法: resolve_base_dir <is_global:true|false> <project_dir>; base_dir="$RESOLVED_BASE_DIR"
-resolve_base_dir() {
+validate_scope_flags() {
     local is_global="$1" project_dir="$2"
-    RESOLVED_BASE_DIR=""
     if [[ "$is_global" == true && -n "$project_dir" ]]; then
         print_error "-g 和 -p 参数不能同时使用"
         return 1
     fi
+    return 0
+}
+
+resolve_base_dir() {
+    local is_global="$1" project_dir="$2"
+    RESOLVED_BASE_DIR=""
+    validate_scope_flags "$is_global" "$project_dir" || return 1
     if [[ "$is_global" == true ]]; then
         RESOLVED_BASE_DIR="$HOME"
     elif [[ -n "$project_dir" ]]; then
@@ -197,6 +203,18 @@ require_project_dir_arg() {
 
 # 支持的 agents 列表
 SUPPORTED_AGENTS="cursor claude-code codex gemini opencode pi omp"
+
+validate_agents() {
+    local agent
+    for agent in "$@"; do
+        if ! get_agent_dir "$agent" "$HOME" "global" >/dev/null 2>&1; then
+            print_error "不支持的 Agent: $agent"
+            print_error "支持的 agents: $SUPPORTED_AGENTS"
+            return 1
+        fi
+    done
+    return 0
+}
 
 # 颜色输出
 RED='\033[0;31m'

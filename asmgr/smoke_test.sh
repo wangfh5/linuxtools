@@ -90,11 +90,11 @@ assert_rc_nonzero() {    # <desc>
 assert_skill_record_empty_agents() {  # <desc-prefix> <yaml> <skill>
     local desc="$1" yaml="$2" skill="$3"
     assert_eq "$desc 记录仍保留" "true" \
-        "$(yq -r ".skills | has(\"$skill\")" "$yaml")"
+        "$(SKILL_KEY="$skill" yq -r '.skills | has(strenv(SKILL_KEY))' "$yaml")"
     assert_eq "$desc agents_link 已清空" "0" \
-        "$(yq -r ".skills.\"$skill\".agents_link | length" "$yaml")"
+        "$(SKILL_KEY="$skill" yq -r '.skills[strenv(SKILL_KEY)].agents_link | length' "$yaml")"
     assert_eq "$desc agents_copy 已清空" "0" \
-        "$(yq -r ".skills.\"$skill\".agents_copy | length" "$yaml")"
+        "$(SKILL_KEY="$skill" yq -r '.skills[strenv(SKILL_KEY)].agents_copy | length' "$yaml")"
 }
 
 # ───────────────────────────── 调用封装 ─────────────────────────────
@@ -264,6 +264,16 @@ tc_add_global_source_quotes_strenv() {
     assert_rc "含双引号 source add 退出码 0" 0
     assert_eq "含双引号 source 原样写入 yaml" "local:$src" \
         "$(yq -r '.skills."quote-source".source' "$yaml")"
+
+    local quoted='quote"skill'
+    mk_central_skill "$H" "$quoted"
+    SKILL_KEY="$quoted" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": ["cursor"], "agents_copy": [], "source": "manual-source", "added_at": "manual-added"}' "$yaml"
+
+    run add "$quoted" -a gemini -g
+    assert_rc "含双引号 skill 按名 add 退出码 0" 0
+    assert_symlink "含双引号 skill 全局 gemini 链接" "$H/.gemini/skills/$quoted"
+    assert_eq "含双引号 skill 按名 add 保留 source" "manual-source" \
+        "$(SKILL_KEY="$quoted" yq -r '.skills[strenv(SKILL_KEY)].source' "$yaml")"
 }
 
 tc_add_local_overwrite() {
@@ -898,6 +908,9 @@ skills:
     source: https://example.com/skills/beta
     added_at: "2026-01-01T00:00:00+08:00"
 YAML
+    local quoted='quote"skill'
+    mk_central_skill "$H" "$quoted"
+    SKILL_KEY="$quoted" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": ["gemini"], "agents_copy": ["codex"], "source": "https://example.com/skills/quoted", "added_at": "2026-01-01T00:00:00+08:00"}' "$yaml"
 
     run sync --from-agents -g
     assert_rc "sync --from-agents -g 退出码 0" 0
@@ -912,6 +925,9 @@ YAML
         "$(yq -r '.skills.beta.source' "$yaml")"
     assert_eq "已安装 skill added_at 仍不变" "2026-01-01T00:00:00+08:00" \
         "$(yq -r '.skills.beta.added_at' "$yaml")"
+    assert_skill_record_empty_agents "含双引号 source-only" "$yaml" "$quoted"
+    assert_eq "含双引号 source-only source 仍存在" "https://example.com/skills/quoted" \
+        "$(SKILL_KEY="$quoted" yq -r '.skills[strenv(SKILL_KEY)].source' "$yaml")"
 }
 
 tc_sync_from_agents_project_migration() {
@@ -1074,6 +1090,13 @@ tc_remove_partial_and_prune() {
     local manifest; manifest=$(expected_manifest "$H" "$proj")
     assert_present "清单已建" "$manifest"
 
+    run remove alpha/ -a claude-code -p "$proj"
+    assert_rc_nonzero "尾斜杠项目 remove 不命中精确 skill 名称 → 报错"
+    assert_contains "尾斜杠项目 remove 提示未找到" "$OUT" "未找到 Skill"
+    assert_symlink "尾斜杠项目 remove 未删链接" "$proj/.claude/skills/alpha"
+    assert_eq "尾斜杠项目 remove 未删清单" "claude-code" \
+        "$(yq -r '.skills.alpha.agents_link[]' "$manifest")"
+
     run remove alpha -a claude-code -p "$proj"   # link → 无需确认
     assert_rc "remove -a -p 退出码 0" 0
     assert_absent "项目链接已删" "$proj/.claude/skills/alpha"
@@ -1088,9 +1111,25 @@ tc_remove_global_partial() {
     run add "$src" -a cursor -g          # link，记录可追溯 source
     run add alpha -a codex -g -c         # copy，按名称安装不得覆盖 source 为 unknown
 
+    run remove alpha/ -a cursor -g
+    assert_rc_nonzero "尾斜杠全局 cursor remove 不命中精确 skill 名称 → 报错"
+    assert_contains "尾斜杠全局 cursor remove 提示未找到" "$OUT" "未找到 Skill"
+    assert_symlink "尾斜杠全局 cursor remove 未删链接" "$H/.cursor/skills/alpha"
+    assert_eq "尾斜杠全局 cursor remove 未改 yaml" "cursor" \
+        "$(yq -r '.skills.alpha.agents_link[]' "$yaml")"
+
+    runc remove alpha/ -a codex -g
+    assert_rc_nonzero "尾斜杠全局 codex remove 不命中精确 skill 名称 → 报错"
+    assert_contains "尾斜杠全局 codex remove 提示未找到" "$OUT" "未找到 Skill"
+    assert_real_dir "尾斜杠全局 codex remove 未删 copy" "$H/.codex/skills/alpha"
+    assert_eq "尾斜杠全局 codex remove 未改 yaml" "codex" \
+        "$(yq -r '.skills.alpha.agents_copy[]' "$yaml")"
+
     run remove alpha -a cursor -g        # 删 link，无需确认
+    assert_rc "全局 cursor remove 退出码 0" 0
     assert_absent "全局 cursor 链接已删" "$H/.cursor/skills/alpha"
     runc remove alpha -a codex -g        # 删 copy 目录，需确认
+    assert_rc "全局 codex remove 退出码 0" 0
     assert_absent "全局 codex copy 已删" "$H/.codex/skills/alpha"
     assert_skill_record_empty_agents "yaml" "$yaml" "alpha"
     assert_eq "yaml source 未丢失" "local:$src" \
@@ -1121,6 +1160,31 @@ tc_remove_complete() {
     assert_absent "全局 claude-code 链接已删" "$H/.claude/skills/alpha"
     assert_eq "yaml 记录已删" "null" "$(yq -r '.skills.alpha // "null"' "$yaml")"
     assert_contains "remove 完成消息" "$OUT" "移除完成"
+
+    mk_central_skill "$H" "beta"
+    run add beta -a claude-code -g
+    assert_rc "尾斜杠场景准备退出码 0" 0
+
+    runc remove beta/
+    assert_rc_nonzero "尾斜杠完全移除不命中精确 skill 名称 → 报错"
+    assert_contains "尾斜杠完全移除提示未找到" "$OUT" "未找到 Skill"
+    assert_present "尾斜杠完全移除未删中央目录" "$H/agent-settings/skills/beta"
+    assert_symlink "尾斜杠完全移除未删全局 claude-code 链接" "$H/.claude/skills/beta"
+    assert_eq "尾斜杠完全移除未删 yaml 记录" "true" "$(yq -r '.skills | has("beta")' "$yaml")"
+
+    mk_central_skill "$H" ".hidden"
+    runc remove .hidden
+    assert_rc "点开头 skill 完全移除退出码 0" 0
+    assert_absent "点开头中央目录已删" "$H/agent-settings/skills/.hidden"
+
+    local quoted='quote"skill'
+    mk_central_skill "$H" "$quoted"
+    SKILL_KEY="$quoted" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": [], "agents_copy": [], "source": "manual", "added_at": "manual"}' "$yaml"
+    runc remove "$quoted"
+    assert_rc "双引号 skill 完全移除退出码 0" 0
+    assert_absent "双引号中央目录已删" "$H/agent-settings/skills/$quoted"
+    assert_eq "双引号 yaml 记录已删" "false" \
+        "$(SKILL_KEY="$quoted" yq -r '.skills | has(strenv(SKILL_KEY))' "$yaml")"
 }
 
 tc_invalid_inputs() {
@@ -1136,7 +1200,67 @@ tc_invalid_inputs() {
     assert_rc_nonzero "本地源不存在 → 报错"
     assert_contains "提示源路径不存在" "$OUT" "源路径不存在"
 
-    # -g 与 -p 互斥（add 与 remove 都经 resolve_base_dir 校验）
+    run add missing-skill -a typo -g
+    assert_rc_nonzero "add 无效 agent 立即报错"
+    assert_contains "add 无效 agent 提示不支持" "$OUT" "不支持的 Agent: typo"
+    assert_not_contains "add 无效 agent 不继续查 source" "$OUT" "未找到 Skill 'missing-skill'"
+
+    run remove alpha -a typo -g
+    assert_rc_nonzero "remove 无效 agent 立即报错"
+    assert_contains "remove 无效 agent 提示不支持" "$OUT" "不支持的 Agent: typo"
+    assert_not_contains "remove 无效 agent 不继续 resolve skill" "$OUT" "未找到 Skill"
+
+    run add missing-skill -a typo -p "$H/no-project"
+    assert_rc_nonzero "add 无效 agent 先于项目目录校验报错"
+    assert_contains "add 无效 agent 优先提示不支持" "$OUT" "不支持的 Agent: typo"
+    assert_not_contains "add 无效 agent 不继续校验项目目录" "$OUT" "项目目录不存在"
+
+    run remove alpha -a typo -p "$H/no-project"
+    assert_rc_nonzero "remove 无效 agent 先于项目目录校验报错"
+    assert_contains "remove 无效 agent 优先提示不支持" "$OUT" "不支持的 Agent: typo"
+    assert_not_contains "remove 无效 agent 不继续校验项目目录" "$OUT" "项目目录不存在"
+
+    run remove /
+    assert_rc_nonzero "remove / 查不到精确 skill 名称 → 报错"
+    assert_contains "remove / 提示未找到" "$OUT" "未找到 Skill"
+    assert_present "remove / 不删除中央 skills 目录" "$H/agent-settings/skills"
+
+    run remove foo/bar
+    assert_rc_nonzero "remove foo/bar 查不到精确 skill 名称 → 报错"
+    assert_contains "remove foo/bar 提示未找到" "$OUT" "未找到 Skill"
+    assert_present "remove foo/bar 不删除中央 alpha" "$H/agent-settings/skills/alpha"
+
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    mkdir -p "$H/agent-settings/agents/victim"
+    cat > "$yaml" << 'EOF'
+skills:
+  "../agents/victim":
+    agents_link: []
+    agents_copy: []
+    source: manual
+    added_at: manual
+EOF
+    runc remove ../agents/victim
+    assert_rc_nonzero "remove 不接受 yaml 中的路径形态 key → 报错"
+    assert_contains "路径形态 yaml key 提示未找到" "$OUT" "未找到 Skill"
+    assert_present "路径形态 yaml key 不越界删除 agents 目录" "$H/agent-settings/agents/victim"
+
+    local badproj="$H/projbad"; mkdir -p "$badproj"; seed_agent_dirs "$badproj"
+    local manifest; manifest=$(expected_manifest "$H" "$badproj")
+    ln -s "$H/agent-settings/skills/alpha" "$badproj/.claude/victim"
+    cat > "$manifest" << 'EOF'
+path: projbad
+skills:
+  "../victim":
+    agents_link: [claude-code]
+    agents_copy: []
+EOF
+    run remove ../victim -a claude-code -p "$badproj"
+    assert_rc_nonzero "remove 不接受 manifest skills 路径形态 key → 报错"
+    assert_contains "路径形态 manifest skill key 提示未找到" "$OUT" "未找到 Skill"
+    assert_symlink "路径形态 manifest skill key 不越界删除项目链接" "$badproj/.claude/victim"
+
+    # -g 与 -p 互斥
     run add alpha -a cursor -g -p "$H/whatever"
     assert_rc_nonzero "add: -g 与 -p 同用 → 报错"
     assert_contains "add 提示 -g/-p 互斥" "$OUT" "不能同时使用"
