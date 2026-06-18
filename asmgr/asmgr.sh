@@ -827,7 +827,7 @@ cmd_sync() {
 sync_from_agents() {
     print_info "从 agents 安装状态（link/copy）重建配置文件..."
 
-    # 初始化配置文件；重扫只让安装列表跟随实态，不抹掉已有 source/added_at。
+    # 初始化配置文件；重扫只让安装列表跟随实态，不抹掉已有 source/updated_at。
     init_skills_yaml
     reset_all_skill_install_entries
 
@@ -1092,6 +1092,7 @@ remove_skill_from_agents() {
                 field=$(agents_field_for_method "$actual_method")
                 remove_agent_from_skill_field "$skill_name" "$field" "$agent"
                 preserve_skill_install_entry_if_empty "$skill_name"
+                touch_skill_updated_at "$skill_name"
             fi
         elif [[ "$mode" == "project" ]]; then
             local manifest

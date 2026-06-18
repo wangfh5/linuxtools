@@ -232,7 +232,7 @@ asmgr sync --from-config [-g | --all]
 1. **首次使用**：已有安装但没有配置，`sync --from-agents` 扫描并生成配置。
 2. **新机器部署**：clone agent-settings 后，`sync --from-config --all` 自动重建全局 + 所有项目的链接/副本。
 
-全局 `sync --from-agents -g` 只让 `agents_link` / `agents_copy` 跟随当前全局安装状态，不覆盖已有 `source` / `added_at` 元数据。
+全局 `sync --from-agents -g` 只让 `agents_link` / `agents_copy` 跟随当前全局安装状态，不覆盖已有 `source` / `updated_at` 元数据。
 
 ### remove — 移除
 
@@ -253,7 +253,7 @@ asmgr remove paper-writing-mentor -s                    # 移除 subagent 链接
 
 Skill remove 按中央目录或目标 agent 安装目录中的已存在名称精确匹配，不接收路径；补全带出的尾斜杠需要删掉。
 
-全局部分移除清空最后一个 agent 后，会在 `skills.yaml` 保留该 skill 记录及其 `source` / `added_at`；只有 `asmgr remove <skill>` 完全移除会删除记录。
+全局部分移除清空最后一个 agent 后，会在 `skills.yaml` 保留该 skill 记录及其 `source`，并把 `updated_at` 刷新到本次移除时间；只有 `asmgr remove <skill>` 完全移除会删除记录。
 
 ### Claude Code plugin / marketplace
 
@@ -297,13 +297,13 @@ skills:
     agents_link: [claude-code, cursor]   # 以符号链接安装的 agents
     agents_copy: [codex]                  # 以复制安装的 agents
     source: https://github.com/anthropics/skills/tree/main/skills/skill-creator
-    added_at: "2026-02-03T23:22:36+08:00" # 本地时区，最近一次 add 的时间
+    updated_at: "2026-02-03T23:22:36+08:00" # 本地时区，最近一次显式 registry 更新
 
   paper-writing-mentor:
     agents_link: []
     agents_copy: []
     source: https://github.com/example/skills/tree/main/paper-writing-mentor
-    added_at: "2026-02-03T23:22:36+08:00"
+    updated_at: "2026-02-03T23:22:36+08:00"
 ```
 
 `agents_link: []` / `agents_copy: []` 是合法状态，表示该 skill 已注册但当前没有全局安装，`source` 仍可用于后续恢复或重新安装。
@@ -316,18 +316,18 @@ claude_code:
   marketplaces:
     codex-plugin-cc:
       source: openai/codex-plugin-cc      # 原样传给 `claude plugin marketplace add`
-      added_at: "2026-04-16T17:00:00+08:00"
+      updated_at: "2026-04-16T17:00:00+08:00"
   plugins:
     - name: openai-codex
       marketplace: codex-plugin-cc
       scope: user                         # user | project | local
-      added_at: "2026-04-16T17:01:00+08:00"
+      updated_at: "2026-04-16T17:01:00+08:00"
 ```
 
 ### 项目清单（project manifest）
 
 每个登记过的项目在 `~/agent-settings/projects/<name>.yaml` 有一份清单，结构对齐 `skills.yaml`，
-去掉 `source`/`added_at`，加 `subagents` 段与权威定位字段 `path`：
+去掉 `source`/`updated_at`，加 `subagents` 段与权威定位字段 `path`：
 
 ```yaml
 path: Projects/foo          # $HOME 内存相对路径；$HOME 外存绝对路径（以 / 开头）

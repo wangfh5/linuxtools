@@ -1,7 +1,7 @@
 # lib/project.sh — 项目级 skill/subagent 清单读写与链接重建
 #
 # 清单文件: $PROJECTS_DIR/<name>.yaml，每项目一个。结构对齐 skills.yaml，
-# 去掉 source/added_at，加平行 subagents 段与权威定位字段 path：
+# 去掉 source/updated_at，加平行 subagents 段与权威定位字段 path：
 #
 #   path: Projects/foo            # $HOME 内存相对路径；$HOME 外存绝对路径（以 / 开头）
 #   skills:
@@ -77,7 +77,7 @@ resolve_subagent_name() {
     return 1
 }
 
-# 以下清单读写仿 lib/yaml.sh，区别：目标=项目清单、section（skills/subagents）参数化、不写 source/added_at
+# 以下清单读写仿 lib/yaml.sh，区别：目标=项目清单、section（skills/subagents）参数化、不写 source/updated_at
 init_project_manifest() {
     local file="$1"
     local stored_path="$2"

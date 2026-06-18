@@ -68,6 +68,9 @@ assert_not_contains() {  # <desc> <haystack> <needle>
 assert_eq() {            # <desc> <expected> <actual>
     if [[ "$2" == "$3" ]]; then pass "$1"; else fail "$1 (expected='$2' actual='$3')"; fi
 }
+assert_ne() {            # <desc> <unexpected> <actual>
+    if [[ "$2" != "$3" ]]; then pass "$1"; else fail "$1 (unexpected='$2')"; fi
+}
 assert_symlink() {       # <desc> <path>
     if [[ -L "$2" ]]; then pass "$1"; else fail "$1 (不是符号链接: $2)"; fi
 }
@@ -245,13 +248,19 @@ tc_add_global_link_and_record() {
     assert_eq "yaml 记录 agents_link 含 cursor" "cursor" \
         "$(yq -r '.skills.alpha.agents_link[]' "$yaml" 2>/dev/null)"
     assert_contains "yaml source 记为 local:" "$(yq -r '.skills.alpha.source' "$yaml")" "local:"
+    local first_updated_at
+    first_updated_at=$(yq -r '.skills.alpha.updated_at // ""' "$yaml")
+    if [[ -n "$first_updated_at" ]]; then pass "yaml updated_at 非空"; else fail "yaml updated_at 非空"; fi
 
     # 名称搜索 + 第二个 agent（多 agent 路径）
+    yq -i '.skills.alpha.updated_at = "2000-01-01T00:00:00+08:00"' "$yaml"
     run add alpha -a gemini claude-code -g
     assert_rc "按名 add 退出码 0" 0
     assert_symlink "全局 gemini 链接" "$H/.gemini/skills/alpha"
     assert_symlink "全局 claude-code 链接" "$H/.claude/skills/alpha"
     assert_contains "add 完成消息" "$OUT" "添加完成"
+    assert_ne "按名 add 刷新 updated_at" "2000-01-01T00:00:00+08:00" \
+        "$(yq -r '.skills.alpha.updated_at' "$yaml")"
 }
 
 tc_add_global_source_quotes_strenv() {
@@ -267,7 +276,7 @@ tc_add_global_source_quotes_strenv() {
 
     local quoted='quote"skill'
     mk_central_skill "$H" "$quoted"
-    SKILL_KEY="$quoted" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": ["cursor"], "agents_copy": [], "source": "manual-source", "added_at": "manual-added"}' "$yaml"
+    SKILL_KEY="$quoted" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": ["cursor"], "agents_copy": [], "source": "manual-source", "updated_at": "manual-added"}' "$yaml"
 
     run add "$quoted" -a gemini -g
     assert_rc "含双引号 skill 按名 add 退出码 0" 0
@@ -302,7 +311,7 @@ tc_add_local_overwrite() {
 }
 
 tc_link_to_copy_migration_and_field_order() {
-    note "link↔copy 迁移 + skills.yaml 字段顺序 (agents_link/agents_copy/source/added_at)"
+    note "link↔copy 迁移 + skills.yaml 字段顺序 (agents_link/agents_copy/source/updated_at)"
     H=$(new_home); seed_agent_dirs "$H"
     local yaml="$H/agent-settings/skills/skills.yaml"
     mk_central_skill "$H" "beta"
@@ -321,16 +330,16 @@ tc_link_to_copy_migration_and_field_order() {
     assert_contains "cursor 已进入 agents_copy" "$copy_list" "cursor"
 
     # 字段顺序断言
-    local ln_link ln_copy ln_source ln_added
+    local ln_link ln_copy ln_source ln_updated
     ln_link=$(grep -n -- "agents_link:" "$yaml" | head -1 | cut -d: -f1)
     ln_copy=$(grep -n -- "agents_copy:" "$yaml" | head -1 | cut -d: -f1)
     ln_source=$(grep -n -- "source:" "$yaml" | head -1 | cut -d: -f1)
-    ln_added=$(grep -n -- "added_at:" "$yaml" | head -1 | cut -d: -f1)
-    if [[ -n "$ln_link" && -n "$ln_copy" && -n "$ln_source" && -n "$ln_added" ]] \
-        && (( ln_link < ln_copy && ln_copy < ln_source && ln_source < ln_added )); then
-        pass "字段顺序 agents_link < agents_copy < source < added_at"
+    ln_updated=$(grep -n -- "updated_at:" "$yaml" | head -1 | cut -d: -f1)
+    if [[ -n "$ln_link" && -n "$ln_copy" && -n "$ln_source" && -n "$ln_updated" ]] \
+        && (( ln_link < ln_copy && ln_copy < ln_source && ln_source < ln_updated )); then
+        pass "字段顺序 agents_link < agents_copy < source < updated_at"
     else
-        fail "字段顺序错误 (link=$ln_link copy=$ln_copy source=$ln_source added=$ln_added)"
+        fail "字段顺序错误 (link=$ln_link copy=$ln_copy source=$ln_source updated=$ln_updated)"
         dump "$(cat "$yaml")"
     fi
 }
@@ -665,9 +674,9 @@ tc_status_global_registry_missing_fix() {
         "$(yq -r '.skills.unregistered.agents_copy | length' "$yaml")"
     assert_eq "补齐记录 source 为 unknown" "unknown" \
         "$(yq -r '.skills.unregistered.source' "$yaml")"
-    local added_at
-    added_at=$(yq -r '.skills.unregistered.added_at // ""' "$yaml")
-    if [[ -n "$added_at" ]]; then pass "补齐记录 added_at 非空"; else fail "补齐记录 added_at 非空"; fi
+    local updated_at
+    updated_at=$(yq -r '.skills.unregistered.updated_at // ""' "$yaml")
+    if [[ -n "$updated_at" ]]; then pass "补齐记录 updated_at 非空"; else fail "补齐记录 updated_at 非空"; fi
 }
 
 tc_status_global_registry_stale_fix() {
@@ -676,7 +685,7 @@ tc_status_global_registry_stale_fix() {
     local yaml="$H/agent-settings/skills/skills.yaml"
     mk_central_skill "$H" "alpha"
     run add alpha -a cursor -g
-    SKILL_KEY="stale" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": [], "agents_copy": [], "source": "manual", "added_at": "2026-01-01T00:00:00+08:00"}' "$yaml"
+    SKILL_KEY="stale" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": [], "agents_copy": [], "source": "manual", "updated_at": "2026-01-01T00:00:00+08:00"}' "$yaml"
 
     run status -g
     assert_rc_nonzero "stale registry 返回非零"
@@ -698,7 +707,7 @@ tc_status_global_registry_stale_fix_removes_declared_installs() {
     local yaml="$H/agent-settings/skills/skills.yaml"
     mk_central_skill "$H" "alpha"
     run add alpha -a cursor -g
-    SKILL_KEY="stale" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": ["gemini"], "agents_copy": ["codex"], "source": "manual", "added_at": "2026-01-01T00:00:00+08:00"}' "$yaml"
+    SKILL_KEY="stale" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": ["gemini"], "agents_copy": ["codex"], "source": "manual", "updated_at": "2026-01-01T00:00:00+08:00"}' "$yaml"
     ln -s "$H/agent-settings/skills/stale" "$H/.gemini/skills/stale"
     mkdir -p "$H/.codex/skills/stale"
     printf 'stale copy\n' > "$H/.codex/skills/stale/data.txt"
@@ -726,7 +735,7 @@ tc_status_global_registry_stale_fix_keeps_record_on_cleanup_failure() {
     local yaml="$H/agent-settings/skills/skills.yaml"
     mk_central_skill "$H" "alpha"
     run add alpha -a cursor -g
-    SKILL_KEY="stale" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": ["gemini"], "agents_copy": [], "source": "manual", "added_at": "2026-01-01T00:00:00+08:00"}' "$yaml"
+    SKILL_KEY="stale" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": ["gemini"], "agents_copy": [], "source": "manual", "updated_at": "2026-01-01T00:00:00+08:00"}' "$yaml"
     ln -s "$H/agent-settings/skills/stale" "$H/.gemini/skills/stale"
     chmod u-w "$H/.gemini/skills"
 
@@ -750,7 +759,7 @@ tc_status_global_registry_stale_fix_rejects_path_key_cleanup() {
     local yaml="$H/agent-settings/skills/skills.yaml"
     mk_central_skill "$H" "alpha"
     run add alpha -a cursor -g
-    SKILL_KEY="../victim" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": ["cursor"], "agents_copy": [], "source": "manual", "added_at": "2026-01-01T00:00:00+08:00"}' "$yaml"
+    SKILL_KEY="../victim" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": ["cursor"], "agents_copy": [], "source": "manual", "updated_at": "2026-01-01T00:00:00+08:00"}' "$yaml"
     mkdir -p "$H/agent-settings/victim"
     printf 'source\n' > "$H/agent-settings/victim/SKILL.md"
     mkdir -p "$H/.cursor/victim"
@@ -1047,7 +1056,7 @@ tc_omp_sync_from_agents_and_config() {
 }
 
 tc_sync_from_agents_global_preserves_source_only() {
-    note "sync --from-agents -g：保留无全局安装和已安装 skill 的 source/added_at"
+    note "sync --from-agents -g：保留无全局安装和已安装 skill 的 source/updated_at"
     H=$(new_home); seed_agent_dirs "$H"
     local yaml="$H/agent-settings/skills/skills.yaml"
     mk_central_skill "$H" "alpha"
@@ -1059,30 +1068,30 @@ skills:
     agents_link: []
     agents_copy: []
     source: https://example.com/skills/alpha
-    added_at: "2026-01-01T00:00:00+08:00"
+    updated_at: "2026-01-01T00:00:00+08:00"
   beta:
     agents_link: [gemini]
     agents_copy: []
     source: https://example.com/skills/beta
-    added_at: "2026-01-01T00:00:00+08:00"
+    updated_at: "2026-01-01T00:00:00+08:00"
 YAML
     local quoted='quote"skill'
     mk_central_skill "$H" "$quoted"
-    SKILL_KEY="$quoted" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": ["gemini"], "agents_copy": ["codex"], "source": "https://example.com/skills/quoted", "added_at": "2026-01-01T00:00:00+08:00"}' "$yaml"
+    SKILL_KEY="$quoted" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": ["gemini"], "agents_copy": ["codex"], "source": "https://example.com/skills/quoted", "updated_at": "2026-01-01T00:00:00+08:00"}' "$yaml"
 
     run sync --from-agents -g
     assert_rc "sync --from-agents -g 退出码 0" 0
     assert_skill_record_empty_agents "source-only" "$yaml" "alpha"
     assert_eq "source-only 记录 source 仍存在" "https://example.com/skills/alpha" \
         "$(yq -r '.skills.alpha.source' "$yaml")"
-    assert_eq "source-only added_at 仍不变" "2026-01-01T00:00:00+08:00" \
-        "$(yq -r '.skills.alpha.added_at' "$yaml")"
+    assert_eq "source-only updated_at 仍不变" "2026-01-01T00:00:00+08:00" \
+        "$(yq -r '.skills.alpha.updated_at' "$yaml")"
     assert_eq "已安装 skill agents_link 跟随实态" "cursor" \
         "$(yq -r '.skills.beta.agents_link[]' "$yaml")"
     assert_eq "已安装 skill source 仍不变" "https://example.com/skills/beta" \
         "$(yq -r '.skills.beta.source' "$yaml")"
-    assert_eq "已安装 skill added_at 仍不变" "2026-01-01T00:00:00+08:00" \
-        "$(yq -r '.skills.beta.added_at' "$yaml")"
+    assert_eq "已安装 skill updated_at 仍不变" "2026-01-01T00:00:00+08:00" \
+        "$(yq -r '.skills.beta.updated_at' "$yaml")"
     assert_skill_record_empty_agents "含双引号 source-only" "$yaml" "$quoted"
     assert_eq "含双引号 source-only source 仍存在" "https://example.com/skills/quoted" \
         "$(SKILL_KEY="$quoted" yq -r '.skills[strenv(SKILL_KEY)].source' "$yaml")"
@@ -1283,12 +1292,18 @@ tc_remove_global_partial() {
     assert_eq "尾斜杠全局 codex remove 未改 yaml" "codex" \
         "$(yq -r '.skills.alpha.agents_copy[]' "$yaml")"
 
+    yq -i '.skills.alpha.updated_at = "2000-01-01T00:00:00+08:00"' "$yaml"
     run remove alpha -a cursor -g        # 删 link，无需确认
     assert_rc "全局 cursor remove 退出码 0" 0
     assert_absent "全局 cursor 链接已删" "$H/.cursor/skills/alpha"
+    assert_ne "全局 cursor remove 刷新 updated_at" "2000-01-01T00:00:00+08:00" \
+        "$(yq -r '.skills.alpha.updated_at' "$yaml")"
+    yq -i '.skills.alpha.updated_at = "2000-01-01T00:00:00+08:00"' "$yaml"
     runc remove alpha -a codex -g        # 删 copy 目录，需确认
     assert_rc "全局 codex remove 退出码 0" 0
     assert_absent "全局 codex copy 已删" "$H/.codex/skills/alpha"
+    assert_ne "全局 codex remove 刷新 updated_at" "2000-01-01T00:00:00+08:00" \
+        "$(yq -r '.skills.alpha.updated_at' "$yaml")"
     assert_skill_record_empty_agents "yaml" "$yaml" "alpha"
     assert_eq "yaml source 未丢失" "local:$src" \
         "$(yq -r '.skills.alpha.source' "$yaml")"
@@ -1337,7 +1352,7 @@ tc_remove_complete() {
 
     local quoted='quote"skill'
     mk_central_skill "$H" "$quoted"
-    SKILL_KEY="$quoted" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": [], "agents_copy": [], "source": "manual", "added_at": "manual"}' "$yaml"
+    SKILL_KEY="$quoted" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": [], "agents_copy": [], "source": "manual", "updated_at": "manual"}' "$yaml"
     runc remove "$quoted"
     assert_rc "双引号 skill 完全移除退出码 0" 0
     assert_absent "双引号中央目录已删" "$H/agent-settings/skills/$quoted"
@@ -1396,7 +1411,7 @@ skills:
     agents_link: []
     agents_copy: []
     source: manual
-    added_at: manual
+    updated_at: manual
 EOF
     runc remove ../agents/victim
     assert_rc_nonzero "remove 不接受 yaml 中的路径形态 key → 报错"
@@ -1442,18 +1457,22 @@ tc_plugin_yaml_roundtrip() {
         # shellcheck disable=SC1090
         source "$ROOT_DIR/lib/yaml.sh"
         source "$ROOT_DIR/lib/plugin.sh"
-        update_marketplace_in_yaml "mkt-x" "owner/repo-x" 1
+        update_marketplace_in_yaml "mkt-x" "owner/repo-x"
         update_plugin_in_yaml "plug-y" "mkt-x" "user"
     )
     assert_present "claude_code round-trip 写出 yaml" "$yaml"
     assert_eq "marketplace source round-trip" "owner/repo-x" \
         "$(yq -r '.claude_code.marketplaces."mkt-x".source' "$yaml")"
+    assert_eq "marketplace updated_at round-trip" "2026-01-01T00:00:00+08:00" \
+        "$(yq -r '.claude_code.marketplaces."mkt-x".updated_at' "$yaml")"
     assert_eq "plugin name round-trip" "plug-y" \
         "$(yq -r '.claude_code.plugins[0].name' "$yaml")"
     assert_eq "plugin marketplace round-trip" "mkt-x" \
         "$(yq -r '.claude_code.plugins[0].marketplace' "$yaml")"
     assert_eq "plugin scope round-trip" "user" \
         "$(yq -r '.claude_code.plugins[0].scope' "$yaml")"
+    assert_eq "plugin updated_at round-trip" "2026-01-01T00:00:00+08:00" \
+        "$(yq -r '.claude_code.plugins[0].updated_at' "$yaml")"
 
     # getters 读回
     local got
@@ -1483,6 +1502,7 @@ tc_plugin_from_agents_import() {
 JSON
     mk_central_skill "$H" "alpha"
     run add alpha -a claude-code -g                    # 先有 yaml + 链接
+    yq -i '.claude_code.marketplaces."cool-mkt" = {"source": "owner/cool", "updated_at": "2026-01-01T00:00:00+08:00"} | .claude_code.marketplaces."old-mkt" = {"source": "owner/old", "updated_at": "2026-01-02T00:00:00+08:00"} | .claude_code.plugins = [{"name": "cool-plugin", "marketplace": "cool-mkt", "scope": "user", "updated_at": "2026-01-01T00:01:00+08:00"}, {"name": "old-plugin", "marketplace": "old-mkt", "scope": "user", "updated_at": "2026-01-02T00:01:00+08:00"}]' "$yaml"
 
     run_fake "$fb" sync --from-agents -g               # plugin_sync_from_claude 走 fake CLI
     assert_rc "sync --from-agents -g 退出码 0" 0
@@ -1490,10 +1510,18 @@ JSON
     assert_contains "fake claude 确被调用 (plugin list)" "$(cat "$log" 2>/dev/null)" "plugin list"
     assert_eq "导入 marketplace source" "owner/cool" \
         "$(yq -r '.claude_code.marketplaces."cool-mkt".source' "$yaml")"
+    assert_eq "已有 marketplace updated_at 保留" "2026-01-01T00:00:00+08:00" \
+        "$(yq -r '.claude_code.marketplaces."cool-mkt".updated_at' "$yaml")"
     assert_eq "导入 plugin name" "cool-plugin" \
         "$(yq -r '.claude_code.plugins[0].name' "$yaml")"
     assert_eq "导入 plugin marketplace" "cool-mkt" \
         "$(yq -r '.claude_code.plugins[0].marketplace' "$yaml")"
+    assert_eq "已有 plugin updated_at 保留" "2026-01-01T00:01:00+08:00" \
+        "$(yq -r '.claude_code.plugins[0].updated_at' "$yaml")"
+    assert_eq "未启用 marketplace updated_at 保留" "2026-01-02T00:00:00+08:00" \
+        "$(yq -r '.claude_code.marketplaces."old-mkt".updated_at' "$yaml")"
+    assert_eq "未启用 plugin updated_at 保留" "2026-01-02T00:01:00+08:00" \
+        "$(yq -r '.claude_code.plugins[] | select(.name == "old-plugin" and .marketplace == "old-mkt").updated_at' "$yaml")"
     assert_eq "skill 记录被重新发现" "claude-code" \
         "$(yq -r '.skills.alpha.agents_link[]' "$yaml")"
 }
@@ -1513,17 +1541,17 @@ skills:
     agents_link: [cursor]
     agents_copy: []
     source: unknown
-    added_at: "2026-01-01T00:00:00+08:00"
+    updated_at: "2026-01-01T00:00:00+08:00"
 claude_code:
   marketplaces:
     deploy-mkt:
       source: owner/deploy
-      added_at: "2026-01-01T00:00:00+08:00"
+      updated_at: "2026-01-01T00:00:00+08:00"
   plugins:
     - name: dep-plugin
       marketplace: deploy-mkt
       scope: user
-      added_at: "2026-01-01T00:00:00+08:00"
+      updated_at: "2026-01-01T00:00:00+08:00"
 YAML
     run_fake "$fb" sync --from-config -g
     assert_rc "sync --from-config -g 退出码 0" 0
