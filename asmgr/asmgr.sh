@@ -468,6 +468,91 @@ list_global() {
 #                           Status: consistency check                          #
 # ---------------------------------------------------------------------------- #
 # 检查配置与实际全局链接/复制的一致性
+list_central_skill_dirs() {
+    [[ ! -d "$SKILLS_DIR" ]] && return 0
+
+    local entry skill_name
+    for entry in "$SKILLS_DIR"/* "$SKILLS_DIR"/.[!.]* "$SKILLS_DIR"/..?*; do
+        [[ -d "$entry" ]] || continue
+        skill_name="${entry##*/}"
+        [[ "$skill_name" == "skills.yaml" ]] && continue
+        printf '%s\n' "$skill_name"
+    done
+}
+
+status_is_direct_child_name() {
+    local name="$1"
+    [[ -n "$name" && "$name" != "." && "$name" != ".." && "$name" != */* ]]
+}
+
+status_remove_stale_global_installs() {
+    local skill_name="$1"
+    local agent agent_dir field target_path
+    local failed=0
+
+    if ! status_is_direct_child_name "$skill_name"; then
+        print_error "拒绝清理非直接子目录 registry key: $skill_name"
+        return 1
+    fi
+
+    for field in agents_link agents_copy; do
+        while IFS= read -r agent; do
+            [[ -z "$agent" ]] && continue
+            agent_dir=$(get_agent_dir "$agent" "$HOME" "global" 2>/dev/null) || continue
+            target_path="$agent_dir/$skill_name"
+            [[ -e "$target_path" || -L "$target_path" ]] || continue
+            if /bin/rm -rf "$target_path"; then
+                echo "  已删除 stale 安装: $target_path"
+            else
+                print_error "删除 stale 安装失败: $target_path"
+                failed=1
+            fi
+        done <<< "$(get_skill_agents_field "$skill_name" "$field")"
+    done
+
+    return $failed
+}
+
+status_check_global_registry() {
+    local fix_mode="${1:-0}"
+    local found_issue=0
+    local skill_name
+
+    echo "检查中央 registry..."
+
+    while IFS= read -r skill_name; do
+        [[ -z "$skill_name" ]] && continue
+        if ! skill_exists_in_yaml "$skill_name"; then
+            print_status_tag MISSING "$skill_name (中央目录存在，skills.yaml 无记录)"
+            found_issue=1
+            if [[ $fix_mode -eq 1 ]]; then
+                update_skills_yaml "$skill_name" "unknown" 1 "link"
+                echo "  已添加 registry 记录"
+            fi
+        fi
+    done <<< "$(list_central_skill_dirs)"
+
+    if [[ -f "$SKILLS_YAML" ]]; then
+        while IFS= read -r skill_name; do
+            [[ -z "$skill_name" ]] && continue
+            if ! status_is_direct_child_name "$skill_name" || [[ ! -d "$SKILLS_DIR/$skill_name" ]]; then
+                print_status_tag STALE "$skill_name (skills.yaml 有记录，中央目录不存在)"
+                found_issue=1
+                if [[ $fix_mode -eq 1 ]]; then
+                    if status_remove_stale_global_installs "$skill_name"; then
+                        remove_skill_from_yaml "$skill_name"
+                        echo "  已删除 registry 记录"
+                    else
+                        echo "  保留 registry 记录，等待 stale 安装清理完成"
+                    fi
+                fi
+            fi
+        done <<< "$(get_all_skills)"
+    fi
+
+    return $found_issue
+}
+
 # 检查某 skill 在一组 agents 下、某 method（link|copy）的全局安装一致性（返回 0=全 OK, 1=有问题）。
 # 全局侧的逐条检查器，对应 project.sh 的 _status_check_entry（消息/缩进/修复命令各自独立）。
 _status_check_global_entry() {
@@ -531,6 +616,8 @@ status_check_configured_skill() {
     local skill_name="$1"
     local fix_mode="$2"
     local found_issue=0
+
+    status_is_direct_child_name "$skill_name" || return 0
 
     local skill_source="$SKILLS_DIR/$skill_name"
     local link_agents copy_agents
@@ -649,6 +736,8 @@ status_global() {
 
     local has_issues=0
 
+    status_check_global_registry "$fix_mode" || has_issues=1
+
     if [[ -f "$SKILLS_YAML" ]]; then
         local skills
         skills=$(get_all_skills)
@@ -665,7 +754,7 @@ status_global() {
         echo -e "${GREEN}所有检查通过，配置与实际状态一致${NC}"
     else
         if [[ $fix_mode -eq 0 ]]; then
-            echo "发现不一致，运行 'asmgr status --fix' 自动修复"
+            echo "发现不一致，运行 'asmgr status -g --fix' 自动修复"
         else
             info_done "修复"
         fi

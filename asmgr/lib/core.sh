@@ -258,14 +258,14 @@ info_done() {
 }
 
 # 统一 status 详情标签行（区别于 [INFO]/[WARN]/[ERROR] 日志级别，这是检查结果分类）。
-# 用法: print_status_tag <OK|MISSING|WRONG|ORPHAN> "<msg>" ["<indent>"]
+# 用法: print_status_tag <OK|MISSING|WRONG|ORPHAN|STALE> "<msg>" ["<indent>"]
 print_status_tag() {
     local tag="$1" msg="$2" indent="${3:-}"
     local color
     case "$tag" in
         OK)            color="$GREEN" ;;
         MISSING)       color="$RED" ;;
-        WRONG|ORPHAN)  color="$YELLOW" ;;
+        WRONG|ORPHAN|STALE) color="$YELLOW" ;;
         *)             color="$NC" ;;
     esac
     echo -e "${indent}${color}[${tag}]${NC} ${msg}"

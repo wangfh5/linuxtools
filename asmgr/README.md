@@ -209,11 +209,14 @@ asmgr status --fix    # 检查并自动修复
 asmgr status -g       # 检查全局
 ```
 
-检测四种状态：
+检测状态包括：
 - **OK**: 配置有、链接/副本存在且正确
 - **MISSING**: 配置有、链接/副本不存在
 - **ORPHAN**: 配置无、却存在指向中央目录的链接/副本
 - **WRONG**: 安装方式不符或链接目标错误
+- **STALE**: `skills.yaml` 有记录、中央目录不存在（仅全局）
+
+全局 `status -g` 还会把中央 `~/agent-settings/skills/` 的直接子目录当作 registry 真相；`--fix` 会补齐缺失记录，并在可安全清理已声明安装后删除 stale 记录。
 
 ### sync — 双向同步
 

@@ -645,6 +645,164 @@ tc_status_global_copy_issue_folds() {
     assert_rc_nonzero "copy 分支问题折叠进总退出码（link OK 不会把它清回 0）"
 }
 
+tc_status_global_registry_missing_fix() {
+    note "status -g：中央目录有 skill 但 skills.yaml 缺记录 → --fix 补 registry"
+    H=$(new_home); seed_agent_dirs "$H"
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    mk_central_skill "$H" "unregistered"
+
+    run status -g
+    assert_rc_nonzero "缺 registry 记录返回非零"
+    assert_contains "报告缺 registry 记录" "$OUT" "unregistered (中央目录存在，skills.yaml 无记录)"
+    assert_absent "无 --fix 不创建 yaml" "$yaml"
+
+    run status -g --fix
+    assert_rc_nonzero "--fix 发现并修复后仍返回非零"
+    assert_present "--fix 创建 yaml" "$yaml"
+    assert_eq "补齐记录 agents_link 为空" "0" \
+        "$(yq -r '.skills.unregistered.agents_link | length' "$yaml")"
+    assert_eq "补齐记录 agents_copy 为空" "0" \
+        "$(yq -r '.skills.unregistered.agents_copy | length' "$yaml")"
+    assert_eq "补齐记录 source 为 unknown" "unknown" \
+        "$(yq -r '.skills.unregistered.source' "$yaml")"
+    local added_at
+    added_at=$(yq -r '.skills.unregistered.added_at // ""' "$yaml")
+    if [[ -n "$added_at" ]]; then pass "补齐记录 added_at 非空"; else fail "补齐记录 added_at 非空"; fi
+}
+
+tc_status_global_registry_stale_fix() {
+    note "status -g：skills.yaml 有记录但中央目录缺失 → --fix 删除 stale registry"
+    H=$(new_home); seed_agent_dirs "$H"
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    mk_central_skill "$H" "alpha"
+    run add alpha -a cursor -g
+    SKILL_KEY="stale" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": [], "agents_copy": [], "source": "manual", "added_at": "2026-01-01T00:00:00+08:00"}' "$yaml"
+
+    run status -g
+    assert_rc_nonzero "stale registry 返回非零"
+    assert_contains "报告 stale registry" "$OUT" "stale (skills.yaml 有记录，中央目录不存在)"
+    assert_eq "无 --fix 保留 stale 记录" "true" \
+        "$(yq -r '.skills | has("stale")' "$yaml")"
+
+    run status -g --fix
+    assert_rc_nonzero "--fix 删除 stale 后仍返回非零"
+    assert_eq "--fix 删除 stale 记录" "false" \
+        "$(yq -r '.skills | has("stale")' "$yaml")"
+    assert_eq "有效记录仍保留" "true" \
+        "$(yq -r '.skills | has("alpha")' "$yaml")"
+}
+
+tc_status_global_registry_stale_fix_removes_declared_installs() {
+    note "status -g --fix：删除 stale registry 前清理已声明的全局安装"
+    H=$(new_home); seed_agent_dirs "$H"
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    mk_central_skill "$H" "alpha"
+    run add alpha -a cursor -g
+    SKILL_KEY="stale" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": ["gemini"], "agents_copy": ["codex"], "source": "manual", "added_at": "2026-01-01T00:00:00+08:00"}' "$yaml"
+    ln -s "$H/agent-settings/skills/stale" "$H/.gemini/skills/stale"
+    mkdir -p "$H/.codex/skills/stale"
+    printf 'stale copy\n' > "$H/.codex/skills/stale/data.txt"
+
+    run status -g
+    assert_rc_nonzero "stale registry 带安装返回非零"
+    assert_contains "报告 stale registry 带安装" "$OUT" "stale (skills.yaml 有记录，中央目录不存在)"
+    assert_symlink "无 --fix 保留 stale 符号链接" "$H/.gemini/skills/stale"
+    assert_real_dir "无 --fix 保留 stale copy" "$H/.codex/skills/stale"
+
+    run status -g --fix
+    assert_rc_nonzero "--fix 清理 stale 安装后仍返回非零"
+    assert_absent "--fix 删除 stale 符号链接" "$H/.gemini/skills/stale"
+    assert_absent "--fix 删除 stale copy" "$H/.codex/skills/stale"
+    assert_eq "--fix 删除 stale registry 记录" "false" \
+        "$(yq -r '.skills | has("stale")' "$yaml")"
+
+    run status -g
+    assert_rc "stale registry 和安装清理后 status 干净" 0
+}
+
+tc_status_global_registry_stale_fix_keeps_record_on_cleanup_failure() {
+    note "status -g --fix：stale 安装清理失败时保留 registry 记录"
+    H=$(new_home); seed_agent_dirs "$H"
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    mk_central_skill "$H" "alpha"
+    run add alpha -a cursor -g
+    SKILL_KEY="stale" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": ["gemini"], "agents_copy": [], "source": "manual", "added_at": "2026-01-01T00:00:00+08:00"}' "$yaml"
+    ln -s "$H/agent-settings/skills/stale" "$H/.gemini/skills/stale"
+    chmod u-w "$H/.gemini/skills"
+
+    run status -g --fix
+    assert_rc_nonzero "stale 安装清理失败时 --fix 返回非零"
+    assert_contains "报告 stale 安装清理失败" "$OUT" "删除 stale 安装失败"
+    assert_contains "提示保留 registry 记录" "$OUT" "保留 registry 记录"
+    assert_symlink "清理失败后 stale 符号链接仍存在" "$H/.gemini/skills/stale"
+    assert_eq "清理失败后 stale registry 记录仍保留" "true" \
+        "$(yq -r '.skills | has("stale")' "$yaml")"
+
+    run status -g
+    assert_rc_nonzero "后续 status 仍报告 stale registry"
+    assert_contains "后续 status 仍能检测 stale" "$OUT" "stale (skills.yaml 有记录，中央目录不存在)"
+    chmod u+w "$H/.gemini/skills"
+}
+
+tc_status_global_registry_stale_fix_rejects_path_key_cleanup() {
+    note "status -g --fix：拒绝清理路径形态 stale registry key"
+    H=$(new_home); seed_agent_dirs "$H"
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    mk_central_skill "$H" "alpha"
+    run add alpha -a cursor -g
+    SKILL_KEY="../victim" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": ["cursor"], "agents_copy": [], "source": "manual", "added_at": "2026-01-01T00:00:00+08:00"}' "$yaml"
+    mkdir -p "$H/agent-settings/victim"
+    printf 'source\n' > "$H/agent-settings/victim/SKILL.md"
+    mkdir -p "$H/.cursor/victim"
+    printf 'keep\n' > "$H/.cursor/victim/data.txt"
+
+    run status -g --fix
+    assert_rc_nonzero "路径形态 stale key --fix 返回非零"
+    assert_contains "拒绝清理路径形态 key" "$OUT" "拒绝清理非直接子目录 registry key"
+    assert_present "路径形态 stale key 不越界删除文件" "$H/.cursor/victim/data.txt"
+    assert_eq "路径形态 stale registry 记录仍保留" "true" \
+        "$(SKILL_KEY="../victim" yq -r '.skills | has(strenv(SKILL_KEY))' "$yaml")"
+
+    run status -g
+    assert_rc_nonzero "路径形态 stale key 后续仍可检测"
+    assert_contains "后续 status 仍报告路径形态 stale key" "$OUT" "../victim (skills.yaml 有记录，中央目录不存在)"
+}
+
+tc_status_global_registry_check_continues() {
+    note "status -g：registry issue 存在时仍继续检查已配置安装"
+    H=$(new_home); seed_agent_dirs "$H"
+    mk_central_skill "$H" "alpha"
+    mk_central_skill "$H" "unregistered"
+    run add alpha -a cursor -g
+    rm -f "$H/.cursor/skills/alpha"
+
+    run status -g
+    assert_rc_nonzero "registry + install issue 返回非零"
+    assert_contains "报告 registry 缺记录" "$OUT" "unregistered (中央目录存在，skills.yaml 无记录)"
+    assert_contains "继续报告安装缺失" "$OUT" "alpha -> cursor (配置有，链接不存在)"
+}
+
+tc_status_global_registry_quoted_key_fix() {
+    note "status -g：registry --fix 安全处理含双引号 skill key"
+    H=$(new_home); seed_agent_dirs "$H"
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    local quoted='quote"skill'
+    mk_central_skill "$H" "$quoted"
+
+    run status -g --fix
+    assert_rc_nonzero "含双引号缺记录 --fix 返回非零"
+    assert_eq "含双引号 skill 已补进 yaml" "true" \
+        "$(SKILL_KEY="$quoted" yq -r '.skills | has(strenv(SKILL_KEY))' "$yaml")"
+    assert_eq "含双引号 skill agents_link 为空" "0" \
+        "$(SKILL_KEY="$quoted" yq -r '.skills[strenv(SKILL_KEY)].agents_link | length' "$yaml")"
+
+    rm -rf "$H/agent-settings/skills/$quoted"
+    run status -g --fix
+    assert_rc_nonzero "含双引号 stale --fix 返回非零"
+    assert_eq "含双引号 stale 记录已删" "false" \
+        "$(SKILL_KEY="$quoted" yq -r '.skills | has(strenv(SKILL_KEY))' "$yaml")"
+}
+
 tc_project_add_default_cwd_in_home() {
     note "add 默认 cwd（$HOME 内项目）：写项目清单 + 相对命名"
     H=$(new_home)
@@ -1450,6 +1608,13 @@ tc_status_global_wrong_target_fix
 tc_status_global_copy_wrong_type_fix
 tc_status_global_copy_missing_fix
 tc_status_global_copy_issue_folds
+tc_status_global_registry_missing_fix
+tc_status_global_registry_stale_fix
+tc_status_global_registry_stale_fix_removes_declared_installs
+tc_status_global_registry_stale_fix_keeps_record_on_cleanup_failure
+tc_status_global_registry_stale_fix_rejects_path_key_cleanup
+tc_status_global_registry_check_continues
+tc_status_global_registry_quoted_key_fix
 tc_status_global_orphan_fix
 tc_status_all_exit_folds_global
 tc_sync_all_exit_folds_global
