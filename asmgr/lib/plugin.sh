@@ -28,24 +28,18 @@ ensure_claude_code_section() {
 }
 
 # 写入/更新 marketplace 记录
-# 用法: update_marketplace_in_yaml <name> <source> [touch_added_at:0|1]
+# 用法: update_marketplace_in_yaml <name> <source>
 update_marketplace_in_yaml() {
     local name="$1"
     local source="$2"
-    local touch_added_at="${3:-1}"
 
     ensure_claude_code_section
 
-    local timestamp current_added_at
+    local timestamp
     timestamp=$(now_timestamp_local)
-    current_added_at=$(yq -r ".claude_code.marketplaces.\"$name\".added_at // \"\"" "$SKILLS_YAML" 2>/dev/null)
 
-    local final_added_at="$current_added_at"
-    if [[ -z "$final_added_at" || "$touch_added_at" == "1" ]]; then
-        final_added_at="$timestamp"
-    fi
-
-    yq -i ".claude_code.marketplaces.\"$name\" = {\"source\": \"$source\", \"added_at\": \"$final_added_at\"}" "$SKILLS_YAML"
+    MARKETPLACE_NAME="$name" SOURCE_VALUE="$source" UPDATED_AT_VALUE="$timestamp" \
+        yq -i '.claude_code.marketplaces[strenv(MARKETPLACE_NAME)] = {"source": strenv(SOURCE_VALUE), "updated_at": strenv(UPDATED_AT_VALUE)}' "$SKILLS_YAML"
 }
 
 get_all_marketplaces_from_yaml() {
@@ -56,7 +50,7 @@ get_all_marketplaces_from_yaml() {
 get_marketplace_source_from_yaml() {
     local name="$1"
     [[ ! -f "$SKILLS_YAML" ]] && return 1
-    yq -r ".claude_code.marketplaces.\"$name\".source // \"\"" "$SKILLS_YAML" 2>/dev/null
+    MARKETPLACE_NAME="$name" yq -r '.claude_code.marketplaces[strenv(MARKETPLACE_NAME)].source // ""' "$SKILLS_YAML" 2>/dev/null
 }
 
 # 写入/更新 plugin 记录（list 里按 name+marketplace 唯一）
@@ -72,8 +66,10 @@ update_plugin_in_yaml() {
     timestamp=$(now_timestamp_local)
 
     # 先删掉同 name@mkt 的旧条目，再 append
-    yq -i "del(.claude_code.plugins[] | select(.name == \"$plugin\" and .marketplace == \"$marketplace\"))" "$SKILLS_YAML"
-    yq -i ".claude_code.plugins += [{\"name\": \"$plugin\", \"marketplace\": \"$marketplace\", \"scope\": \"$scope\", \"added_at\": \"$timestamp\"}]" "$SKILLS_YAML"
+    PLUGIN_NAME="$plugin" MARKETPLACE_NAME="$marketplace" \
+        yq -i 'del(.claude_code.plugins[] | select(.name == strenv(PLUGIN_NAME) and .marketplace == strenv(MARKETPLACE_NAME)))' "$SKILLS_YAML"
+    PLUGIN_NAME="$plugin" MARKETPLACE_NAME="$marketplace" SCOPE_VALUE="$scope" UPDATED_AT_VALUE="$timestamp" \
+        yq -i '.claude_code.plugins += [{"name": strenv(PLUGIN_NAME), "marketplace": strenv(MARKETPLACE_NAME), "scope": strenv(SCOPE_VALUE), "updated_at": strenv(UPDATED_AT_VALUE)}]' "$SKILLS_YAML"
 }
 
 # 遍历 yaml plugins，每行输出: <name>\t<marketplace>\t<scope>
@@ -187,14 +183,14 @@ plugin_sync_from_claude() {
         local name
         while IFS= read -r name; do
             [[ -z "$name" ]] && continue
-            if yq -e ".claude_code.marketplaces.\"$name\"" "$SKILLS_YAML" &>/dev/null; then
+            if MARKETPLACE_NAME="$name" yq -e '.claude_code.marketplaces // {} | has(strenv(MARKETPLACE_NAME))' "$SKILLS_YAML" &>/dev/null; then
                 echo "  [skip] $name（yaml 已有）"
                 continue
             fi
             local source
             source=$(cc_marketplace_source "$name")
             [[ -z "$source" || "$source" == "null" ]] && source="unknown"
-            update_marketplace_in_yaml "$name" "$source" 1
+            update_marketplace_in_yaml "$name" "$source"
             echo "  [add]  $name ($source)"
             added_mkt=$((added_mkt+1))
         done <<< "$mkt_list"
@@ -212,7 +208,7 @@ plugin_sync_from_claude() {
             [[ -z "$spec" ]] && continue
             plugin="${spec%@*}"
             marketplace="${spec##*@}"
-            exists=$(yq -r ".claude_code.plugins // [] | map(select(.name == \"$plugin\" and .marketplace == \"$marketplace\")) | length" "$SKILLS_YAML" 2>/dev/null)
+            exists=$(PLUGIN_NAME="$plugin" MARKETPLACE_NAME="$marketplace" yq -r '.claude_code.plugins // [] | map(select(.name == strenv(PLUGIN_NAME) and .marketplace == strenv(MARKETPLACE_NAME))) | length' "$SKILLS_YAML" 2>/dev/null)
             if [[ "${exists:-0}" != "0" ]]; then
                 echo "  [skip] $spec（yaml 已有）"
                 continue

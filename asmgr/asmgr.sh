@@ -90,6 +90,7 @@ add 命令参数:
     注意: 默认是当前目录项目安装并写入项目清单；用 -g 才是全局安装
 
 remove 命令参数:
+    <skill>             Skill remove 按已存在的 skill/install 名称精确匹配，不接收路径
     -a <agents...>      指定要移除的 agents
     -s, --subagent      移除 subagent（从 .claude/agents 解链 + 更新清单）
     -g, --global        从全局安装移除
@@ -153,6 +154,9 @@ Claude Code plugins: $CLAUDE_PLUGINS_DIR
 EOF
 }
 
+# ---------------------------------------------------------------------------- #
+#                             Add skills/subagents                             #
+# ---------------------------------------------------------------------------- #
 
 cmd_add_interactive() {
     local is_global="$1"
@@ -290,6 +294,12 @@ cmd_add() {
         esac
     done
 
+    validate_scope_flags "$is_global" "$project_dir" || return 1
+
+    if [[ "$is_subagent" != true ]]; then
+        validate_agents "${agents[@]}" || return 1
+    fi
+
     if [[ -z "$source" ]]; then
         cmd_add_interactive \
             "$is_global" "$project_dir" "$use_copy" "$is_subagent" \
@@ -298,7 +308,7 @@ cmd_add() {
         return $?
     fi
 
-    # 解析 scope → base 目录（含 -g/-p 互斥与 -p 存在性校验）
+    # 解析 scope → base 目录（含 -p 存在性校验）
     resolve_base_dir "$is_global" "$project_dir" || return 1
     local base_dir="$RESOLVED_BASE_DIR"
 
@@ -409,6 +419,10 @@ cmd_add() {
     info_done "添加" "$SKILL_NAME"
     return 0
 }
+
+# ---------------------------------------------------------------------------- #
+#                             List skills/subagents                            #
+# ---------------------------------------------------------------------------- #
 
 # 当前项目清单的列出动作（带 cwd 专属表头），供 run_on_cwd_manifest 调用
 _list_cwd_one() {
@@ -544,7 +558,95 @@ list_global() {
     done <<< "$skills"
 }
 
+# ---------------------------------------------------------------------------- #
+#                           Status: consistency check                          #
+# ---------------------------------------------------------------------------- #
 # 检查配置与实际全局链接/复制的一致性
+list_central_skill_dirs() {
+    [[ ! -d "$SKILLS_DIR" ]] && return 0
+
+    local entry skill_name
+    for entry in "$SKILLS_DIR"/* "$SKILLS_DIR"/.[!.]* "$SKILLS_DIR"/..?*; do
+        [[ -d "$entry" ]] || continue
+        skill_name="${entry##*/}"
+        [[ "$skill_name" == "skills.yaml" ]] && continue
+        printf '%s\n' "$skill_name"
+    done
+}
+
+status_is_direct_child_name() {
+    local name="$1"
+    [[ -n "$name" && "$name" != "." && "$name" != ".." && "$name" != */* ]]
+}
+
+status_remove_stale_global_installs() {
+    local skill_name="$1"
+    local agent agent_dir field target_path
+    local failed=0
+
+    if ! status_is_direct_child_name "$skill_name"; then
+        print_error "拒绝清理非直接子目录 registry key: $skill_name"
+        return 1
+    fi
+
+    for field in agents_link agents_copy; do
+        while IFS= read -r agent; do
+            [[ -z "$agent" ]] && continue
+            agent_dir=$(get_agent_dir "$agent" "$HOME" "global" 2>/dev/null) || continue
+            target_path="$agent_dir/$skill_name"
+            [[ -e "$target_path" || -L "$target_path" ]] || continue
+            if /bin/rm -rf "$target_path"; then
+                echo "  已删除 stale 安装: $target_path"
+            else
+                print_error "删除 stale 安装失败: $target_path"
+                failed=1
+            fi
+        done <<< "$(get_skill_agents_field "$skill_name" "$field")"
+    done
+
+    return $failed
+}
+
+status_check_global_registry() {
+    local fix_mode="${1:-0}"
+    local found_issue=0
+    local skill_name
+
+    echo "检查中央 registry..."
+
+    while IFS= read -r skill_name; do
+        [[ -z "$skill_name" ]] && continue
+        if ! skill_exists_in_yaml "$skill_name"; then
+            print_status_tag MISSING "$skill_name (中央目录存在，skills.yaml 无记录)"
+            found_issue=1
+            if [[ $fix_mode -eq 1 ]]; then
+                update_skills_yaml "$skill_name" "unknown" 1 "link"
+                echo "  已添加 registry 记录"
+            fi
+        fi
+    done <<< "$(list_central_skill_dirs)"
+
+    if [[ -f "$SKILLS_YAML" ]]; then
+        while IFS= read -r skill_name; do
+            [[ -z "$skill_name" ]] && continue
+            if ! status_is_direct_child_name "$skill_name" || [[ ! -d "$SKILLS_DIR/$skill_name" ]]; then
+                print_status_tag STALE "$skill_name (skills.yaml 有记录，中央目录不存在)"
+                found_issue=1
+                if [[ $fix_mode -eq 1 ]]; then
+                    if status_remove_stale_global_installs "$skill_name"; then
+                        remove_skill_from_yaml "$skill_name"
+                        echo "  已删除 registry 记录"
+                    else
+                        echo "  保留 registry 记录，等待 stale 安装清理完成"
+                    fi
+                fi
+            fi
+        done <<< "$(get_all_skills)"
+    fi
+
+    return $found_issue
+}
+
 # 检查某 skill 在一组 agents 下、某 method（link|copy）的全局安装一致性（返回 0=全 OK, 1=有问题）。
 # 全局侧的逐条检查器，对应 project.sh 的 _status_check_entry（消息/缩进/修复命令各自独立）。
 _status_check_global_entry() {
@@ -608,6 +710,8 @@ status_check_configured_skill() {
     local skill_name="$1"
     local fix_mode="$2"
     local found_issue=0
+
+    status_is_direct_child_name "$skill_name" || return 0
 
     local skill_source="$SKILLS_DIR/$skill_name"
     local link_agents copy_agents
@@ -726,6 +830,8 @@ status_global() {
 
     local has_issues=0
 
+    status_check_global_registry "$fix_mode" || has_issues=1
+
     if [[ -f "$SKILLS_YAML" ]]; then
         local skills
         skills=$(get_all_skills)
@@ -742,7 +848,7 @@ status_global() {
         echo -e "${GREEN}所有检查通过，配置与实际状态一致${NC}"
     else
         if [[ $fix_mode -eq 0 ]]; then
-            echo "发现不一致，运行 'asmgr status --fix' 自动修复"
+            echo "发现不一致，运行 'asmgr status -g --fix' 自动修复"
         else
             info_done "修复"
         fi
@@ -752,6 +858,10 @@ status_global() {
     # （检测期已置位的 has_issues；--fix 后仍返回非零，与项目侧一致）。
     return $has_issues
 }
+
+# ---------------------------------------------------------------------------- #
+#                            Sync: actual <-> config                           #
+# ---------------------------------------------------------------------------- #
 
 # 同步命令
 cmd_sync() {
@@ -811,7 +921,7 @@ cmd_sync() {
 sync_from_agents() {
     print_info "从 agents 安装状态（link/copy）重建配置文件..."
 
-    # 初始化配置文件；重扫只让安装列表跟随实态，不抹掉已有 source/added_at。
+    # 初始化配置文件；重扫只让安装列表跟随实态，不抹掉已有 source/updated_at。
     init_skills_yaml
     reset_all_skill_install_entries
 
@@ -921,7 +1031,52 @@ sync_from_config() {
     fi
 }
 
-# 移除 skill 命令
+# ---------------------------------------------------------------------------- #
+#                            Remove skills/subagents                           #
+# ---------------------------------------------------------------------------- #
+
+remove_child_dir_exists_exact() {
+    local dir="$1" name="$2" path
+    [[ -n "$name" && -d "$dir" ]] || return 1
+    for path in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+        [[ -d "$path" ]] || continue
+        [[ "${path##*/}" == "$name" ]] && return 0
+    done
+    return 1
+}
+
+remove_agent_install_exists_exact() {
+    local name="$1" base_dir="$2" mode="$3"
+    shift 3
+    [[ -n "$name" ]] || return 1
+
+    local agent agent_dir path
+    for agent in "$@"; do
+        agent_dir=$(get_agent_dir "$agent" "$base_dir" "$mode" 2>/dev/null) || continue
+        [[ -d "$agent_dir" ]] || continue
+        for path in "$agent_dir"/* "$agent_dir"/.[!.]* "$agent_dir"/..?*; do
+            [[ -L "$path" || -d "$path" ]] || continue
+            [[ "${path##*/}" == "$name" ]] && return 0
+        done
+    done
+    return 1
+}
+
+resolve_complete_remove_skill_name() {
+    local name="$1"
+    remove_child_dir_exists_exact "$SKILLS_DIR" "$name" && return 0
+    print_error "未找到 Skill '$name'"
+    return 1
+}
+
+resolve_partial_remove_skill_name() {
+    local name="$1" base_dir="$2" mode="$3"
+    shift 3
+    remove_agent_install_exists_exact "$name" "$base_dir" "$mode" "$@" && return 0
+    print_error "未找到 Skill '$name'"
+    return 1
+}
+
 # 完全移除 skill（中央目录 + 所有全局安装 + 配置记录）
 remove_skill_completely() {
     local skill_name="$1"
@@ -1031,6 +1186,7 @@ remove_skill_from_agents() {
                 field=$(agents_field_for_method "$actual_method")
                 remove_agent_from_skill_field "$skill_name" "$field" "$agent"
                 preserve_skill_install_entry_if_empty "$skill_name"
+                touch_skill_updated_at "$skill_name"
             fi
         elif [[ "$mode" == "project" ]]; then
             local manifest
@@ -1102,15 +1258,20 @@ cmd_remove() {
         esac
     done
 
-    if [[ "$is_global" == true && -n "$project_dir" ]]; then
-        print_error "-g 和 -p 参数不能同时使用"
-        return 1
+    validate_scope_flags "$is_global" "$project_dir" || return 1
+
+    if [[ "$is_subagent" != true ]]; then
+        validate_agents "${agents[@]}" || return 1
+    fi
+
+    local base_dir=""
+    if [[ "$is_subagent" == true || ${#agents[@]} -gt 0 ]]; then
+        resolve_base_dir "$is_global" "$project_dir" || return 1
+        base_dir="$RESOLVED_BASE_DIR"
     fi
 
     # subagent 分支：从 .claude/agents 解链 + 更新项目清单 subagents 段
     if [[ "$is_subagent" == true ]]; then
-        resolve_base_dir "$is_global" "$project_dir" || return 1
-        local base_dir="$RESOLVED_BASE_DIR"
         local sub_name
         sub_name=$(resolve_subagent_name "$skill_name") || sub_name="$skill_name"
         unlink_subagent_from_project "$base_dir" "$sub_name"
@@ -1128,10 +1289,18 @@ cmd_remove() {
     fi
 
     if [[ ${#agents[@]} -eq 0 ]]; then
+        resolve_complete_remove_skill_name "$skill_name" || return 1
         remove_skill_completely "$skill_name"
     else
-        resolve_base_dir "$is_global" "$project_dir" || return 1
-        local base_dir="$RESOLVED_BASE_DIR"
+        local mode
+        if [[ "$is_global" == true ]]; then
+            mode="global"
+        else
+            mode="project"
+        fi
+
+        resolve_partial_remove_skill_name "$skill_name" "$base_dir" "$mode" "${agents[@]}" || return 1
+
         if [[ "$is_global" == true ]]; then
             print_info "从全局安装移除 Skill: $skill_name"
         elif [[ -n "$project_dir" ]]; then
@@ -1140,19 +1309,14 @@ cmd_remove() {
             print_info "从当前目录移除 Skill: $skill_name"
         fi
 
-        local mode
-        if [[ "$is_global" == true ]]; then
-            mode="global"
-        else
-            mode="project"
-        fi
-
         remove_skill_from_agents "$skill_name" "$base_dir" "$mode" "${agents[@]}"
     fi
 }
 
 
-# 主函数
+# ---------------------------------------------------------------------------- #
+#                                main function                                 #
+# ---------------------------------------------------------------------------- #
 main() {
     if [[ $# -eq 0 ]]; then
         show_help

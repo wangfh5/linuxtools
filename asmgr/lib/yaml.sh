@@ -29,13 +29,14 @@ get_skill_agents_field() {
     local skill_name="$1"
     local field="$2"
     [[ ! -f "$SKILLS_YAML" ]] && return 1
-    yq -r ".skills.\"$skill_name\".$field // [] | .[]" "$SKILLS_YAML" 2>/dev/null
+    SKILL_NAME="$skill_name" FIELD_NAME="$field" \
+        yq -r '.skills[strenv(SKILL_NAME)][strenv(FIELD_NAME)] // [] | .[]' "$SKILLS_YAML" 2>/dev/null
 }
 
 # skills.yaml 中是否存在某 skill 记录（文件不存在即视为不存在）。
 # 全局侧与 project.sh 的 pm_entry_exists 对应。
 skill_exists_in_yaml() {
-    [[ -f "$SKILLS_YAML" ]] && yq -e ".skills.\"$1\"" "$SKILLS_YAML" &>/dev/null
+    [[ -f "$SKILLS_YAML" ]] && SKILL_NAME="$1" yq -e '.skills | has(strenv(SKILL_NAME))' "$SKILLS_YAML" &>/dev/null
 }
 
 # 从 base 中移除 remove 列表中的 agents（结果写入全局数组 _filtered_agents）
@@ -99,11 +100,11 @@ compute_agent_arrays() {
 }
 
 # 更新 skills.yaml 配置文件
-# 用法: update_skills_yaml <skill_name> <source> <touch_added_at:0|1> <method:link|copy> <agent1> [agent2] ...
+# 用法: update_skills_yaml <skill_name> <source> <touch_updated_at:0|1> <method:link|copy> <agent1> [agent2] ...
 update_skills_yaml() {
     local skill_name="$1"
     local source="$2"
-    local touch_added_at="${3:-1}"
+    local touch_updated_at="${3:-1}"
     local method="${4:-link}"
     shift 4
     local agents=("$@")
@@ -115,12 +116,12 @@ update_skills_yaml() {
 
     local exists=0
     local current_source=""
-    local current_added_at=""
+    local current_updated_at=""
 
     if skill_exists_in_yaml "$skill_name"; then
         exists=1
-        current_source=$(yq -r ".skills.\"$skill_name\".source // \"\"" "$SKILLS_YAML" 2>/dev/null)
-        current_added_at=$(yq -r ".skills.\"$skill_name\".added_at // \"\"" "$SKILLS_YAML" 2>/dev/null)
+        current_source=$(SKILL_NAME="$skill_name" yq -r '.skills[strenv(SKILL_NAME)].source // ""' "$SKILLS_YAML" 2>/dev/null)
+        current_updated_at=$(SKILL_NAME="$skill_name" yq -r '.skills[strenv(SKILL_NAME)].updated_at // ""' "$SKILLS_YAML" 2>/dev/null)
     fi
 
     # source：传入 unknown 表示"不改现有 source"；如果是新建记录则写入 unknown。
@@ -134,10 +135,10 @@ update_skills_yaml() {
         final_source="$source"
     fi
 
-    # added_at
-    local final_added_at="$current_added_at"
-    if [[ $exists -eq 0 || "$touch_added_at" == "1" || -z "$final_added_at" ]]; then
-        final_added_at="$timestamp"
+    # updated_at
+    local final_updated_at="$current_updated_at"
+    if [[ $exists -eq 0 || "$touch_updated_at" == "1" || -z "$final_updated_at" ]]; then
+        final_updated_at="$timestamp"
     fi
 
     local _link_yaml _copy_yaml
@@ -146,17 +147,16 @@ update_skills_yaml() {
         "$(get_skill_agents_field "$skill_name" "agents_copy")" \
         "$method" "${agents[@]}"
 
-    # 整块重写，保证字段顺序：agents_link、agents_copy、source、added_at；
-    # source/added_at 来自外部输入或系统时间，必须经 strenv() 进入 yq，避免表达式注入。
-    SOURCE_VALUE="$final_source" ADDED_AT_VALUE="$final_added_at" \
-        yq -i ".skills.\"$skill_name\" = {\"agents_link\": $_link_yaml, \"agents_copy\": $_copy_yaml, \"source\": strenv(SOURCE_VALUE), \"added_at\": strenv(ADDED_AT_VALUE)}" "$SKILLS_YAML"
+    # 整块重写，保证字段顺序：agents_link、agents_copy、source、updated_at；
+    # source/updated_at 来自外部输入或系统时间，必须经 strenv() 进入 yq，避免表达式注入。
+    SKILL_NAME="$skill_name" SOURCE_VALUE="$final_source" UPDATED_AT_VALUE="$final_updated_at" \
+        yq -i ".skills[strenv(SKILL_NAME)] = {\"agents_link\": $_link_yaml, \"agents_copy\": $_copy_yaml, \"source\": strenv(SOURCE_VALUE), \"updated_at\": strenv(UPDATED_AT_VALUE)}" "$SKILLS_YAML"
 }
 
 # 从 skills.yaml 读取 skill 的 link/copy agents 列表
 get_skill_agents_link() {
     local skill_name="$1"
-    [[ ! -f "$SKILLS_YAML" ]] && return 1
-    yq -r ".skills.\"$skill_name\".agents_link // [] | .[]" "$SKILLS_YAML" 2>/dev/null
+    get_skill_agents_field "$skill_name" "agents_link"
 }
 
 get_skill_agents_copy() {
@@ -182,20 +182,32 @@ remove_agent_from_skill_field() {
     local agent="$3"
     [[ ! -f "$SKILLS_YAML" ]] && return 1
 
-    yq -i ".skills.\"$skill_name\".$field -= [\"$agent\"]" "$SKILLS_YAML"
+    SKILL_NAME="$skill_name" FIELD_NAME="$field" AGENT_NAME="$agent" \
+        yq -i '.skills[strenv(SKILL_NAME)][strenv(FIELD_NAME)] -= [strenv(AGENT_NAME)]' "$SKILLS_YAML"
 }
 
-# 保留无全局安装的 skill 记录：agents_link/agents_copy 为空时，source/added_at
+touch_skill_updated_at() {
+    local skill_name="$1"
+    [[ ! -f "$SKILLS_YAML" ]] && return 0
+    skill_exists_in_yaml "$skill_name" || return 0
+
+    local timestamp
+    timestamp=$(now_timestamp_local)
+    SKILL_NAME="$skill_name" UPDATED_AT_VALUE="$timestamp" \
+        yq -i '.skills[strenv(SKILL_NAME)].updated_at = strenv(UPDATED_AT_VALUE)' "$SKILLS_YAML"
+}
+
+# 保留无全局安装的 skill 记录：agents_link/agents_copy 为空时，source/updated_at
 # 仍是跨机器恢复时唯一可追溯的来源信息。完全删除只由 remove_skill_from_yaml 执行。
 preserve_skill_install_entry_if_empty() {
     local skill_name="$1"
     [[ ! -f "$SKILLS_YAML" ]] && return 0
     skill_exists_in_yaml "$skill_name" || return 0
     local remaining_link remaining_copy
-    remaining_link=$(yq -r ".skills.\"$skill_name\".agents_link // [] | length" "$SKILLS_YAML" 2>/dev/null)
-    remaining_copy=$(yq -r ".skills.\"$skill_name\".agents_copy // [] | length" "$SKILLS_YAML" 2>/dev/null)
+    remaining_link=$(SKILL_NAME="$skill_name" yq -r '.skills[strenv(SKILL_NAME)].agents_link // [] | length' "$SKILLS_YAML" 2>/dev/null)
+    remaining_copy=$(SKILL_NAME="$skill_name" yq -r '.skills[strenv(SKILL_NAME)].agents_copy // [] | length' "$SKILLS_YAML" 2>/dev/null)
     if [[ "${remaining_link:-0}" == "0" && "${remaining_copy:-0}" == "0" ]]; then
-        yq -i ".skills.\"$skill_name\".agents_link = [] | .skills.\"$skill_name\".agents_copy = []" "$SKILLS_YAML"
+        SKILL_NAME="$skill_name" yq -i '.skills[strenv(SKILL_NAME)].agents_link = [] | .skills[strenv(SKILL_NAME)].agents_copy = []' "$SKILLS_YAML"
     fi
 }
 
@@ -205,13 +217,13 @@ get_all_skills() {
     yq -r '.skills | keys | .[]' "$SKILLS_YAML" 2>/dev/null
 }
 
-# 从 agents 实态重扫前只清空安装列表，不抹掉 source/added_at。
+# 从 agents 实态重扫前只清空安装列表，不抹掉 source/updated_at。
 reset_all_skill_install_entries() {
     [[ ! -f "$SKILLS_YAML" ]] && return 0
     local skill_name
     while IFS= read -r skill_name; do
         [[ -z "$skill_name" ]] && continue
-        yq -i ".skills.\"$skill_name\".agents_link = [] | .skills.\"$skill_name\".agents_copy = []" "$SKILLS_YAML"
+        SKILL_NAME="$skill_name" yq -i '.skills[strenv(SKILL_NAME)].agents_link = [] | .skills[strenv(SKILL_NAME)].agents_copy = []' "$SKILLS_YAML"
     done <<< "$(get_all_skills)"
 }
 
@@ -219,5 +231,5 @@ reset_all_skill_install_entries() {
 remove_skill_from_yaml() {
     local skill_name="$1"
     [[ ! -f "$SKILLS_YAML" ]] && return 0
-    yq -i "del(.skills.\"$skill_name\")" "$SKILLS_YAML"
+    SKILL_NAME="$skill_name" yq -i 'del(.skills[strenv(SKILL_NAME)])' "$SKILLS_YAML"
 }
