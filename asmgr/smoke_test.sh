@@ -147,6 +147,7 @@ mk_central_sub_md() {    # 文件型 subagent: agents/<name>.md
 
 run()    { OUT=$(HOME="$H" "$SM" "$@" 2>&1); RC=$?; }
 runc()   { OUT=$(printf 'y\n' | HOME="$H" "$SM" "$@" 2>&1); RC=$?; }
+run_input() { local input="$1"; shift; OUT=$(printf '%s' "$input" | HOME="$H" "$SM" "$@" 2>&1); RC=$?; }
 run_in() { local d="$1"; shift; OUT=$(cd "$d" && HOME="$H" "$SM" "$@" 2>&1); RC=$?; }
 runc_in(){ local d="$1"; shift; OUT=$(cd "$d" && printf 'y\n' | HOME="$H" "$SM" "$@" 2>&1); RC=$?; }
 # 把一个 fake CLI 目录放到 PATH 最前再调用。注意 asmgr 启动会把标准目录再前置到 $PATH 之前，
@@ -252,6 +253,28 @@ tc_add_global_link_and_record() {
     assert_symlink "全局 gemini 链接" "$H/.gemini/skills/alpha"
     assert_symlink "全局 claude-code 链接" "$H/.claude/skills/alpha"
     assert_contains "add 完成消息" "$OUT" "添加完成"
+}
+
+tc_add_interactive_fallback() {
+    note "add 交互选择器：无 TTY fallback 编号输入"
+    H=$(new_home); seed_agent_dirs "$H"
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    mk_central_skill "$H" "alpha"
+    mk_central_skill "$H" "beta"
+
+    # 已指定 agents/scope/method，只需要选择 skill；排序后 alpha 为 1。
+    run_input $'1\n' add -a cursor -g -c
+    assert_rc "交互 add（已给 -a/-g/-c）退出码 0" 0
+    assert_real_dir "交互选择 alpha 后 copy 到 cursor" "$H/.cursor/skills/alpha"
+    assert_eq "交互 copy 写入 agents_copy" "cursor" \
+        "$(yq -r '.skills.alpha.agents_copy[]' "$yaml" 2>/dev/null)"
+
+    # 完整交互：选择 beta、claude-code、global、默认 link。
+    run_input $'2\n2\n2\n\n' add
+    assert_rc "完整交互 add 退出码 0" 0
+    assert_symlink "交互选择 beta 后 link 到 claude-code" "$H/.claude/skills/beta"
+    assert_eq "完整交互写入 agents_link" "claude-code" \
+        "$(yq -r '.skills.beta.agents_link[]' "$yaml" 2>/dev/null)"
 }
 
 tc_add_global_source_quotes_strenv() {
@@ -1311,6 +1334,7 @@ tc_sync_all_exit_folds_global() {
 # ════════════════════════════ 运行 ════════════════════════════
 tc_help_and_deps
 tc_add_global_link_and_record
+tc_add_interactive_fallback
 tc_add_global_source_quotes_strenv
 tc_add_local_overwrite
 tc_link_to_copy_migration_and_field_order

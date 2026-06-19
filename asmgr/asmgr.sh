@@ -21,6 +21,7 @@ SCRIPT_DIR=$(cd "$(dirname "$_script")" && pwd)
 unset _script _dir
 
 source "$SCRIPT_DIR/lib/core.sh" || { echo "error: failed to load lib/core.sh" >&2; exit 1; }
+source "$SCRIPT_DIR/lib/interactive.sh" || { echo "error: failed to load lib/interactive.sh" >&2; exit 1; }
 source "$SCRIPT_DIR/lib/materialize.sh" || { echo "error: failed to load lib/materialize.sh" >&2; exit 1; }
 source "$SCRIPT_DIR/lib/yaml.sh" || { echo "error: failed to load lib/yaml.sh" >&2; exit 1; }
 source "$SCRIPT_DIR/lib/plugin.sh" || { echo "error: failed to load lib/plugin.sh" >&2; exit 1; }
@@ -43,7 +44,7 @@ scope 约定（所有命令通用，决定操作落在哪里）:
     --all           全局 + 所有已登记项目（仅 list / status / sync --from-config）
 
 命令（scope 默认均为「当前目录项目」，除非另行说明）:
-    add <source> [-a <agents...>] [-s] [-g|-p <dir>] [-c]  添加 skill/subagent 并链接到 agents
+    add [source] [-a <agents...>] [-s] [-g|-p <dir>] [-c]  添加 skill/subagent 并链接到 agents；省略 source 进入选择器
     list   [-g | -p <dir> | --all]                列出 skills/项目
     status [--fix] [-g | -p <dir> | --all]        检查链接一致性（--fix 自动修复）
     sync --from-agents [-g | -p <dir>]            从现有安装（link/copy）反向重建配置
@@ -63,14 +64,14 @@ Claude Code plugin / marketplace（仅对 claude-code 生效，依赖 claude CLI
     （当前目录 / -p 项目级 sync 只处理 skills，不涉及 plugin/marketplace。）
 
 add 命令参数:
-    source              Skill 来源，支持三种格式:
+    source              可省略；省略时从中央目录进入交互式选择器。显式传入时支持三种格式:
                         - GitHub URL: https://github.com/owner/repo/tree/branch/path/to/skill
                         - 本地路径: /path/to/skill 或 ./skill 或 ../skill
                           (必须以 /, ./, ../ 开头，显式指定路径)
                         - Skill 名称: skill-creator (搜索中央目录)
 
     -a <agents...>      指定要链接的 agents，支持: cursor, claude-code, codex, gemini, opencode, pi, omp
-                        可指定多个，用空格分隔；不指定则仅下载到中央目录
+                        可指定多个，用空格分隔；交互模式下不指定则进入 agents 选择器；显式 source 模式下不指定则仅下载到中央目录
 
     -g, --global        全局安装（家目录）
                         创建 ~/.cursor/skills/, ~/.claude/skills/, ~/.codex/skills/, ~/.gemini/skills/,
@@ -81,7 +82,7 @@ add 命令参数:
                              <dir>/.gemini/skills/, <dir>/.opencode/skills/, <dir>/.pi/skills/, <dir>/.omp/skills/
 
     -c, --copy          复制模式（复制整个目录而非符号链接），适用于不支持符号链接的 agent
-                        默认为符号链接模式
+                        默认为符号链接模式；交互模式下指定 -c 会跳过 link/copy 选择
 
     -s, --subagent      把中央 agents/ 下的 subagent（目录或 .md）链接到 .claude/agents
                         固定 claude-code、忽略 -a；项目/局域 scope 会写入清单 subagents 段
@@ -97,6 +98,10 @@ remove 命令参数:
 
 示例:
     # ---- add：scope 由 flag 决定 ----
+    # 交互选择中央 skills、agents、scope、link/copy（无 fzf 时自动退化为编号输入）
+    asmgr add
+    # 已指定 agents/scope/method 时只选择 skills
+    asmgr add -a claude-code opencode -g -c
     # 当前目录项目（默认）：创建 ./.cursor/skills/my-skill
     asmgr add ./my-skill -a cursor
     # 全局（-g）：创建 ~/.cursor/skills/my-skill
@@ -149,6 +154,66 @@ EOF
 }
 
 
+cmd_add_interactive() {
+    local is_global="$1"
+    local project_dir="$2"
+    local use_copy="$3"
+    local is_subagent="$4"
+    local agents_specified="$5"
+    local scope_specified="$6"
+    local method_specified="$7"
+    shift 7
+    local agents=("$@")
+
+    local selected_items=()
+    if [[ "$is_subagent" == true ]]; then
+        asmgr_interactive_select_subagents || return 1
+    else
+        asmgr_interactive_select_skills || return 1
+    fi
+    selected_items=("${_interactive_selected[@]}")
+
+    if [[ "$is_subagent" != true && ( "$agents_specified" != true || ${#agents[@]} -eq 0 ) ]]; then
+        asmgr_interactive_select_agents || return 1
+        agents=("${_interactive_selected[@]}")
+    fi
+
+    if [[ "$scope_specified" != true ]]; then
+        asmgr_interactive_prompt_scope || return 1
+        is_global="$_interactive_is_global"
+        project_dir="$_interactive_project_dir"
+    fi
+
+    if [[ "$is_subagent" != true && "$method_specified" != true ]]; then
+        asmgr_interactive_prompt_method || return 1
+        use_copy="$_interactive_use_copy"
+    fi
+
+    local item failed=() args=()
+    for item in "${selected_items[@]}"; do
+        args=("$item")
+        if [[ "$is_subagent" == true ]]; then
+            args+=("-s")
+        elif [[ ${#agents[@]} -gt 0 ]]; then
+            args+=("-a" "${agents[@]}")
+        fi
+        if [[ "$is_global" == true ]]; then
+            args+=("-g")
+        elif [[ -n "$project_dir" ]]; then
+            args+=("-p" "$project_dir")
+        fi
+        [[ "$use_copy" == true ]] && args+=("-c")
+
+        cmd_add "${args[@]}" || failed+=("$item")
+    done
+
+    if [[ ${#failed[@]} -gt 0 ]]; then
+        print_warn "以下条目未成功安装: ${failed[*]}"
+        return 1
+    fi
+    return 0
+}
+
 # 添加 skill 命令
 cmd_add() {
     local source=""
@@ -158,52 +223,80 @@ cmd_add() {
     local use_copy=false
     local source_by_name=false
     local is_subagent=false
+    local agents_specified=false
+    local scope_specified=false
+    local method_specified=false
 
     # 解析参数
-    if [[ $# -eq 0 ]]; then
-        print_error "缺少 source 参数"
-        show_help
-        return 1
-    fi
-
-    source="$1"
-    shift
-
-    # 解析可选参数
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -a|--agents)
                 shift
+                local agents_before=${#agents[@]}
                 # 收集所有 agents，直到遇到下一个选项或参数结束
                 while [[ $# -gt 0 && ! "$1" =~ ^- ]]; do
                     agents+=("$1")
                     shift
                 done
+                [[ ${#agents[@]} -gt $agents_before ]] && agents_specified=true
                 ;;
             -g|--global)
                 is_global=true
+                scope_specified=true
                 shift
                 ;;
             -p|--project)
                 require_project_dir_arg "$2" || return 1
                 project_dir="$2"
+                scope_specified=true
                 shift 2
                 ;;
             -c|--copy)
                 use_copy=true
+                method_specified=true
                 shift
                 ;;
             -s|--subagent)
                 is_subagent=true
                 shift
                 ;;
-            *)
+            --)
+                shift
+                if [[ -z "$source" && $# -gt 0 ]]; then
+                    source="$1"
+                    shift
+                fi
+                if [[ $# -gt 0 ]]; then
+                    print_error "未知参数: $1"
+                    show_help
+                    return 1
+                fi
+                ;;
+            -*)
                 print_error "未知参数: $1"
                 show_help
                 return 1
                 ;;
+            *)
+                if [[ -z "$source" ]]; then
+                    source="$1"
+                    shift
+                else
+                    print_error "未知参数: $1"
+                    show_help
+                    return 1
+                fi
+                ;;
         esac
     done
+
+    if [[ -z "$source" ]]; then
+        cmd_add_interactive \
+            "$is_global" "$project_dir" "$use_copy" "$is_subagent" \
+            "$agents_specified" "$scope_specified" "$method_specified" \
+            "${agents[@]}"
+        return $?
+    fi
 
     # 解析 scope → base 目录（含 -g/-p 互斥与 -p 存在性校验）
     resolve_base_dir "$is_global" "$project_dir" || return 1
