@@ -865,6 +865,42 @@ tc_project_add_default_cwd_in_home() {
     assert_not_contains "项目 MISSING 不带全局后缀(配置有)" "$OUT" "(配置有"
 }
 
+tc_project_cwd_uses_logical_pwd_for_symlink() {
+    note "默认 cwd：通过 symlink 进入项目时使用逻辑路径"
+    H=$(new_home)
+    local physical="$TMP_ROOT/physical_$(basename "$H")"
+    local link="$H/linked-proj"
+    mkdir -p "$physical"
+    ln -s "$physical" "$link"
+    seed_agent_dirs "$link"
+    mk_central_skill "$H" "alpha"
+
+    local logical_manifest physical_manifest
+    logical_manifest=$(expected_manifest "$H" "$link")
+    physical_manifest=$(expected_manifest "$H" "$physical")
+
+    run_in "$link" add alpha -a codex
+    assert_rc "symlink cwd add 退出码 0" 0
+    assert_symlink "symlink cwd 项目链接已建" "$link/.codex/skills/alpha"
+    assert_present "清单按逻辑路径生成" "$logical_manifest"
+    assert_absent "未按物理路径生成清单" "$physical_manifest"
+    assert_eq "清单 path 保留 symlink 路径" "linked-proj" "$(yq -r '.path' "$logical_manifest")"
+
+    run_in "$link" list
+    assert_contains "symlink cwd list 命中逻辑清单" "$OUT" "alpha"
+    run_in "$link" status
+    assert_contains "symlink cwd status 命中逻辑清单" "$OUT" "[OK]"
+
+    rm -f "$logical_manifest"
+    run_in "$link" sync --from-agents
+    assert_rc "symlink cwd sync --from-agents 退出码 0" 0
+    assert_present "sync --from-agents 按逻辑路径重建清单" "$logical_manifest"
+    assert_absent "sync --from-agents 未按物理路径生成清单" "$physical_manifest"
+    assert_eq "sync 后清单 path 保留 symlink 路径" "linked-proj" "$(yq -r '.path' "$logical_manifest")"
+    assert_eq "sync 后清单登记 codex 链接" "codex" \
+        "$(yq -r '.skills.alpha.agents_link[]' "$logical_manifest")"
+}
+
 tc_no_manifest_isomorphism() {
     note "无清单时 list 与 status 输出同构（WARN + 提示）"
     local H; H=$(new_home)
@@ -1671,6 +1707,7 @@ tc_status_global_orphan_fix
 tc_status_all_exit_folds_global
 tc_sync_all_exit_folds_global
 tc_project_add_default_cwd_in_home
+tc_project_cwd_uses_logical_pwd_for_symlink
 tc_no_manifest_isomorphism
 tc_project_add_p_outside_home
 tc_project_orphan_fix

@@ -54,7 +54,7 @@ project_manifest_file() {
 run_on_cwd_manifest() {
     local fn="$1"; shift
     local d m
-    d="$(/bin/pwd)"
+    d="$(current_pwd_dir)"
     m="$(project_manifest_file "$d")"
     if [[ -f "$m" ]]; then
         "$fn" "$m" "$@"

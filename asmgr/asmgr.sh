@@ -896,7 +896,7 @@ cmd_sync() {
         case "$scope" in
             global) sync_from_agents ;;
             project) local d; d=$(normalize_base_dir "$project_dir"); project_scan_one "$d" ;;
-            cwd) project_scan_one "$(/bin/pwd)" ;;
+            cwd) project_scan_one "$(current_pwd_dir)" ;;
             all) print_error "--all 不适用于 --from-agents（无法发现所有项目目录）"; return 1 ;;
         esac
     else

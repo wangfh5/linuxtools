@@ -70,6 +70,25 @@ AGENTS_DIR="$AGENT_SETTINGS_ROOT/agents"
 # 项目级清单目录（每项目一个 <name>.yaml）
 PROJECTS_DIR="$AGENT_SETTINGS_ROOT/projects"
 
+# 当前目录优先使用 shell 维护的逻辑路径（$PWD），保留 symlink 路径。
+current_pwd_dir() {
+    local logical="${PWD:-}"
+    local logical_physical current_physical
+
+    if [[ "$logical" == /* && -d "$logical" ]]; then
+        logical_physical=$(cd "$logical" && /bin/pwd -P 2>/dev/null) || logical_physical=""
+        current_physical=$(/bin/pwd -P 2>/dev/null) || current_physical=""
+        if [[ -n "$logical_physical" && "$logical_physical" == "$current_physical" ]]; then
+            logical="${logical%/}"
+            [[ -z "$logical" ]] && logical="/"
+            echo "$logical"
+            return 0
+        fi
+    fi
+
+    /bin/pwd -P
+}
+
 # 规范化 base 目录路径
 # 展开 ~ 并转换相对路径为绝对路径
 normalize_base_dir() {
@@ -90,7 +109,7 @@ normalize_base_dir() {
             if [[ -d "$dir" ]]; then
                 path=$(cd "$dir" && pwd)/"$base"
             else
-                path="$(/bin/pwd)/${path#./}"
+                path="$(current_pwd_dir)/${path#./}"
             fi
         fi
     fi
@@ -186,7 +205,7 @@ resolve_base_dir() {
             return 1
         fi
     else
-        RESOLVED_BASE_DIR="$(/bin/pwd)"
+        RESOLVED_BASE_DIR="$(current_pwd_dir)"
     fi
     return 0
 }

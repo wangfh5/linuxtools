@@ -121,7 +121,7 @@ asmgr_interactive_prompt_scope() {
     _interactive_project_dir=""
 
     local cwd choice dir
-    cwd="$(/bin/pwd)"
+    cwd="$(current_pwd_dir)"
     echo "选择 scope" >&2
     echo "  1) 当前项目: $cwd" >&2
     echo "  2) 全局: $HOME" >&2
