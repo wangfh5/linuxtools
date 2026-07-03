@@ -1,7 +1,10 @@
 # lib/sources.sh — skill 来源获取与安装到 agents
 
 # 解析 GitHub URL
-# 输入: https://github.com/owner/repo/tree/branch/path/to/skill
+# 输入:
+#   https://github.com/owner/repo
+#   https://github.com/owner/repo/tree/branch
+#   https://github.com/owner/repo/tree/branch/path/to/skill
 # 输出: 设置全局变量 OWNER, REPO, BRANCH, REPO_PATH, SKILL_NAME
 parse_github_url() {
     local url="$1"
@@ -11,21 +14,37 @@ parse_github_url() {
         return 1
     fi
 
-    # 解析 URL: https://github.com/owner/repo/tree/branch/path/to/skill
-    # 正则表达式匹配
-    if [[ "$url" =~ github\.com/([^/]+)/([^/]+)/tree/([^/]+)/(.+)$ ]]; then
+    while [[ "$url" == */ ]]; do
+        url="${url%/}"
+    done
+
+    if [[ "$url" =~ ^https?://github\.com/([^/]+)/([^/]+)/tree/([^/]+)/(.+)$ ]]; then
         OWNER="${BASH_REMATCH[1]}"
         REPO="${BASH_REMATCH[2]}"
         BRANCH="${BASH_REMATCH[3]}"
         REPO_PATH="${BASH_REMATCH[4]}"
-
-        # 从路径提取 skill 名称（最后一级目录）
         SKILL_NAME=$(/usr/bin/basename "$REPO_PATH")
-
+        return 0
+    elif [[ "$url" =~ ^https?://github\.com/([^/]+)/([^/]+)/tree/([^/]+)$ ]]; then
+        OWNER="${BASH_REMATCH[1]}"
+        REPO="${BASH_REMATCH[2]}"
+        BRANCH="${BASH_REMATCH[3]}"
+        REPO_PATH=""
+        SKILL_NAME="$REPO"
+        return 0
+    elif [[ "$url" =~ ^https?://github\.com/([^/]+)/([^/]+)$ ]]; then
+        OWNER="${BASH_REMATCH[1]}"
+        REPO="${BASH_REMATCH[2]}"
+        BRANCH="HEAD"
+        REPO_PATH=""
+        SKILL_NAME="$REPO"
         return 0
     else
         print_error "无法解析 GitHub URL 格式"
-        print_error "期望格式: https://github.com/owner/repo/tree/branch/path/to/skill"
+        print_error "期望格式:"
+        print_error "  - https://github.com/owner/repo"
+        print_error "  - https://github.com/owner/repo/tree/branch"
+        print_error "  - https://github.com/owner/repo/tree/branch/path/to/skill"
         return 1
     fi
 }
@@ -59,43 +78,68 @@ save_skill_to_central() {
 # 从 GitHub 下载 skill 使用 sparse checkout
 download_from_github() {
     local temp_dir=$(/usr/bin/mktemp -d)
+    local display_path="$REPO_PATH"
+    [[ -z "$display_path" ]] && display_path="."
 
     print_info "下载 Skill: $SKILL_NAME"
-    print_info "来源: https://github.com/$OWNER/$REPO (分支: $BRANCH, 路径: $REPO_PATH)"
+    print_info "来源: https://github.com/$OWNER/$REPO (分支: $BRANCH, 路径: $display_path)"
 
-    # 使用 git sparse-checkout 只下载指定目录
     (
         cd "$temp_dir" || exit 1
 
-        # 初始化仓库
-        if ! /usr/bin/git clone --filter=blob:none --sparse --depth=1 \
-            --branch "$BRANCH" "https://github.com/$OWNER/$REPO.git" repo 2>/dev/null; then
+        local clone_args=(clone --filter=blob:none --depth=1)
+        [[ -n "$REPO_PATH" ]] && clone_args+=(--sparse)
+        [[ "$BRANCH" != "HEAD" ]] && clone_args+=(--branch "$BRANCH")
+        clone_args+=("https://github.com/$OWNER/$REPO.git" repo)
+
+        if ! /usr/bin/git "${clone_args[@]}" 2>/dev/null; then
             print_error "Git clone 失败，请检查 URL 和网络连接"
             exit 1
         fi
 
         cd repo || exit 1
 
-        # 设置 sparse-checkout
-        if ! /usr/bin/git sparse-checkout set "$REPO_PATH" 2>/dev/null; then
-            print_error "Sparse checkout 失败，请检查路径是否正确"
-            exit 1
-        fi
+        if [[ -n "$REPO_PATH" ]]; then
+            # 设置 sparse-checkout
+            if ! /usr/bin/git sparse-checkout set "$REPO_PATH" 2>/dev/null; then
+                print_error "Sparse checkout 失败，请检查路径是否正确"
+                exit 1
+            fi
 
-        # 检查目录是否存在
-        if [[ ! -d "$REPO_PATH" ]]; then
-            print_error "下载的目录不存在: $REPO_PATH"
-            exit 1
-        fi
+            # 检查目录是否存在
+            if [[ ! -d "$REPO_PATH" ]]; then
+                print_error "下载的目录不存在: $REPO_PATH"
+                exit 1
+            fi
 
-        # 检查 SKILL.md 是否存在
-        if [[ ! -f "$REPO_PATH/SKILL.md" ]]; then
-            print_error "目录中没有找到 SKILL.md 文件"
-            exit 1
-        fi
+            # 检查 SKILL.md 是否存在
+            if [[ ! -f "$REPO_PATH/SKILL.md" ]]; then
+                print_error "目录中没有找到 SKILL.md 文件"
+                exit 1
+            fi
 
-        # 复制到中央目录（已存在则提示覆盖；拒绝=保留现有，视为成功）
-        save_skill_to_central "$REPO_PATH" || exit 1
+            # 复制到中央目录（已存在则提示覆盖；拒绝=保留现有，视为成功）
+            save_skill_to_central "$REPO_PATH" || exit 1
+        else
+            # repo 根目录作为 skill 时，复制工作树内容但不要把 .git 带进中央 skills。
+            if [[ ! -f "SKILL.md" ]]; then
+                print_error "目录中没有找到 SKILL.md 文件"
+                exit 1
+            fi
+            local root_skill="$temp_dir/root-skill"
+            /bin/mkdir -p "$root_skill"
+            shopt -s dotglob nullglob
+            local item
+            for item in ./*; do
+                [[ "$item" == "./.git" ]] && continue
+                if ! /bin/cp -R "$item" "$root_skill/"; then
+                    print_error "复制失败: $item -> $root_skill"
+                    exit 1
+                fi
+            done
+            shopt -u dotglob nullglob
+            save_skill_to_central "$root_skill" || exit 1
+        fi
     )
 
     local exit_code=$?

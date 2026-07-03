@@ -264,6 +264,54 @@ tc_add_global_link_and_record() {
         "$(yq -r '.skills.alpha.updated_at' "$yaml")"
 }
 
+tc_add_github_url_parse_shapes() {
+    note "add GitHub URL：repo root / branch root / subdir 三种格式解析"
+    H=$(new_home)
+    source "$ROOT_DIR/lib/core.sh"
+    source "$ROOT_DIR/lib/sources.sh"
+
+    OWNER= REPO= BRANCH= REPO_PATH= SKILL_NAME=
+    if parse_github_url "https://github.com/coleam00/excalidraw-diagram-skill"; then
+        pass "repo root parse 返回 0"
+    else
+        fail "repo root parse 返回 0"
+    fi
+    assert_eq "repo root owner" "coleam00" "$OWNER"
+    assert_eq "repo root repo" "excalidraw-diagram-skill" "$REPO"
+    assert_eq "repo root branch 默认 HEAD" "HEAD" "$BRANCH"
+    assert_eq "repo root path 为空" "" "$REPO_PATH"
+    assert_eq "repo root skill 名为 repo" "excalidraw-diagram-skill" "$SKILL_NAME"
+
+    OWNER= REPO= BRANCH= REPO_PATH= SKILL_NAME=
+    if parse_github_url "https://github.com/coleam00/excalidraw-diagram-skill/tree/main"; then
+        pass "branch root parse 返回 0"
+    else
+        fail "branch root parse 返回 0"
+    fi
+    assert_eq "branch root owner" "coleam00" "$OWNER"
+    assert_eq "branch root repo" "excalidraw-diagram-skill" "$REPO"
+    assert_eq "branch root branch" "main" "$BRANCH"
+    assert_eq "branch root path 为空" "" "$REPO_PATH"
+    assert_eq "branch root skill 名为 repo" "excalidraw-diagram-skill" "$SKILL_NAME"
+
+    OWNER= REPO= BRANCH= REPO_PATH= SKILL_NAME=
+    if parse_github_url "https://github.com/anthropics/skills/tree/main/skills/skill-creator"; then
+        pass "subdir parse 返回 0"
+    else
+        fail "subdir parse 返回 0"
+    fi
+    assert_eq "subdir owner" "anthropics" "$OWNER"
+    assert_eq "subdir repo" "skills" "$REPO"
+    assert_eq "subdir branch" "main" "$BRANCH"
+    assert_eq "subdir path" "skills/skill-creator" "$REPO_PATH"
+    assert_eq "subdir skill 名为路径末级" "skill-creator" "$SKILL_NAME"
+
+    run add "https://github.com/coleam00/excalidraw-diagram-skill/blob/main/SKILL.md" -g
+    assert_rc_nonzero "错误 GitHub URL add 返回非零"
+    assert_contains "错误 GitHub URL 提示格式问题" "$OUT" "无法解析 GitHub URL 格式"
+    assert_not_contains "错误 GitHub URL 不回退中央搜索" "$OUT" "在中央 skills 目录搜索"
+}
+
 tc_add_interactive_fallback() {
     note "add 交互选择器：无 TTY fallback 编号输入"
     H=$(new_home); seed_agent_dirs "$H"
@@ -1680,6 +1728,7 @@ tc_sync_all_exit_folds_global() {
 # ════════════════════════════ 运行 ════════════════════════════
 tc_help_and_deps
 tc_add_global_link_and_record
+tc_add_github_url_parse_shapes
 tc_add_interactive_fallback
 tc_add_global_source_quotes_strenv
 tc_add_local_overwrite

@@ -65,7 +65,9 @@ Claude Code plugin / marketplace（仅对 claude-code 生效，依赖 claude CLI
 
 add 命令参数:
     source              可省略；省略时从中央目录进入交互式选择器。显式传入时支持三种格式:
-                        - GitHub URL: https://github.com/owner/repo/tree/branch/path/to/skill
+                        - GitHub URL: https://github.com/owner/repo
+                                      https://github.com/owner/repo/tree/branch
+                                      https://github.com/owner/repo/tree/branch/path/to/skill
                         - 本地路径: /path/to/skill 或 ./skill 或 ../skill
                           (必须以 /, ./, ../ 开头，显式指定路径)
                         - Skill 名称: skill-creator (搜索中央目录)
@@ -114,6 +116,7 @@ remove 命令参数:
     asmgr add ./my-skill -a codex  -g -c     # copy
     # 多 agents / 从 GitHub 添加
     asmgr add skill-creator -a cursor claude-code -g
+    asmgr add https://github.com/coleam00/excalidraw-diagram-skill -a cursor -g
     asmgr add https://github.com/anthropics/skills/tree/main/skills/skill-creator -a cursor
 
     # ---- 全局 skills 的查看 / 检查 / 同步（注意都要 -g）----
@@ -339,8 +342,11 @@ cmd_add() {
     fi
 
     # 判断 source 类型
-    if parse_github_url "$source"; then
+    if [[ "$source" =~ ^https?://github\.com/ ]]; then
         # GitHub URL
+        if ! parse_github_url "$source"; then
+            return 1
+        fi
         if ! download_from_github; then
             return 1
         fi
@@ -364,7 +370,7 @@ cmd_add() {
         else
             print_error "未找到 Skill '$source'"
             print_error "请提供："
-            print_error "  - GitHub URL: https://github.com/owner/repo/tree/branch/path/to/skill"
+            print_error "  - GitHub URL: https://github.com/owner/repo 或 https://github.com/owner/repo/tree/branch[/path/to/skill]"
             print_error "  - 本地路径: /path/to/skill 或 ./skill"
             print_error "  - 已存在的 Skill 名称（将从 $SKILLS_DIR 搜索）"
             return 1
