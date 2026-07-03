@@ -264,6 +264,55 @@ tc_add_global_link_and_record() {
         "$(yq -r '.skills.alpha.updated_at' "$yaml")"
 }
 
+tc_add_source_only_registry_record() {
+    note "add <source>：无 -a 时仍写中央 registry source 记录"
+    H=$(new_home)
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    local src; src=$(mk_src_skill "$TMP_ROOT/source_only" "source-only")
+
+    run add "$src" -g
+    assert_rc "source-only add 退出码 0" 0
+    assert_present "source-only 中央目录已存在 skill" "$H/agent-settings/skills/source-only/SKILL.md"
+    assert_present "source-only 创建 skills.yaml" "$yaml"
+    assert_skill_record_empty_agents "source-only" "$yaml" "source-only"
+    assert_eq "source-only source 记为 local:" "local:$src" \
+        "$(yq -r '.skills."source-only".source' "$yaml")"
+    local updated_at
+    updated_at=$(yq -r '.skills."source-only".updated_at // ""' "$yaml")
+    if [[ -n "$updated_at" ]]; then pass "source-only updated_at 非空"; else fail "source-only updated_at 非空"; fi
+}
+
+tc_add_project_source_records_global_source() {
+    note "add <source> -p：项目安装同时写中央 registry source-only 记录"
+    H=$(new_home)
+    local proj="$H/proj-source"; mkdir -p "$proj"; seed_agent_dirs "$proj"
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    local manifest; manifest=$(expected_manifest "$H" "$proj")
+    local src; src=$(mk_src_skill "$TMP_ROOT/project_source" "project-source")
+
+    run add "$src" -a cursor -p "$proj"
+    assert_rc "项目 source add 退出码 0" 0
+    assert_symlink "项目 cursor 链接已建" "$proj/.cursor/skills/project-source"
+    assert_present "项目 source 创建全局 skills.yaml" "$yaml"
+    assert_skill_record_empty_agents "项目 source 的全局 registry" "$yaml" "project-source"
+    assert_eq "项目 source 的全局 source 记为 local:" "local:$src" \
+        "$(yq -r '.skills."project-source".source' "$yaml")"
+    assert_present "项目清单已创建" "$manifest"
+    assert_eq "项目清单记录 cursor link" "cursor" \
+        "$(yq -r '.skills."project-source".agents_link[]' "$manifest")"
+}
+
+tc_add_name_without_agents_does_not_touch_registry() {
+    note "add <name>：无 -a 时不创建 registry 记录"
+    H=$(new_home)
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    mk_central_skill "$H" "central-only"
+
+    run add central-only -g
+    assert_rc "按名无 agent add 退出码 0" 0
+    assert_absent "按名无 agent 不创建 skills.yaml" "$yaml"
+}
+
 tc_add_github_url_parse_shapes() {
     note "add GitHub URL：repo root / branch root / subdir 三种格式解析"
     H=$(new_home)
@@ -1728,6 +1777,9 @@ tc_sync_all_exit_folds_global() {
 # ════════════════════════════ 运行 ════════════════════════════
 tc_help_and_deps
 tc_add_global_link_and_record
+tc_add_source_only_registry_record
+tc_add_project_source_records_global_source
+tc_add_name_without_agents_does_not_touch_registry
 tc_add_github_url_parse_shapes
 tc_add_interactive_fallback
 tc_add_global_source_quotes_strenv

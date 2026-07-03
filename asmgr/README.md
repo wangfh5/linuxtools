@@ -136,7 +136,7 @@ asmgr add https://github.com/anthropics/skills/tree/main/skills/skill-creator -a
 ```
 
 说明：
-- 显式传入 `source` 且不传 `-a` 时，只下载/复制到中央目录，不写任何配置。
+- 显式传入 `source` 且不传 `-a` 时，只下载/复制到中央目录，并在全局 `skills.yaml` 写入 source 记录；不会安装到任何 agent。
 - 交互模式下不传 `-a` 会进入 agents 选择器；传了 `-a` 则跳过 agents 选择。
 - 交互模式下不传 `-g` / `-p` 会进入 scope 选择；传了则跳过 scope 选择。
 - 交互模式默认 link；传 `-c` 会直接 copy，跳过 link/copy 选择。

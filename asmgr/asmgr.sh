@@ -229,6 +229,7 @@ cmd_add() {
     local project_dir=""
     local use_copy=false
     local source_by_name=false
+    local source_materialized=false
     local is_subagent=false
     local agents_specified=false
     local scope_specified=false
@@ -350,12 +351,14 @@ cmd_add() {
         if ! download_from_github; then
             return 1
         fi
+        source_materialized=true
     elif [[ "$source" == /* || "$source" == ./* || "$source" == ../* ]]; then
         # 本地路径（必须以 /, ./, ../ 开头，显式指定）
         source=$(normalize_base_dir "$source")
         if ! copy_from_local "$source"; then
             return 1
         fi
+        source_materialized=true
     else
         # 可能是 skill 名称，尝试在中央目录搜索
         print_info "在中央 skills 目录搜索: $source"
@@ -399,18 +402,23 @@ cmd_add() {
     if [[ "$source_by_name" == true ]]; then
         source_str="unknown"
     fi
+    local method="link"
+    [[ "$use_copy" == true ]] && method="copy"
     if [[ ${#installed_agents[@]} -gt 0 ]]; then
-        local method="link"
-        [[ "$use_copy" == true ]] && method="copy"
         if [[ "$is_global" == true ]]; then
             update_skills_yaml "$SKILL_NAME" "$source_str" 1 "$method" "${installed_agents[@]}"
         else
+            if [[ "$source_materialized" == true ]]; then
+                update_skills_yaml "$SKILL_NAME" "$source_str" 1 "link"
+            fi
             # 项目/本地 scope：记录到项目清单 skills 段（path 由 base_dir 现场派生）
             local manifest
             manifest="$(project_touch_manifest "$base_dir")"
             pm_update_entry "$manifest" "skills" "$SKILL_NAME" "$method" "${installed_agents[@]}"
             print_info "已记录到项目清单: $manifest"
         fi
+    elif [[ "$source_materialized" == true ]]; then
+        update_skills_yaml "$SKILL_NAME" "$source_str" 1 "link"
     fi
 
     if [[ ${#failed_agents[@]} -gt 0 ]]; then
