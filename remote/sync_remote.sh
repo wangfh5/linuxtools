@@ -310,7 +310,7 @@ set -u
 TARGET="$1"
 case "$TARGET" in
     "~")   TARGET="$HOME" ;;
-    "~/"*) TARGET="$HOME/${TARGET#~/}" ;;
+    "~/"*) TARGET="$HOME/${TARGET#"~/"}" ;;
 esac
 if [[ ! -d "$TARGET" ]]; then
     echo "EXISTS:false"
@@ -785,7 +785,7 @@ TARGET="$1"
 # 安全地展开 leading tilde（避免 eval 带来的命令注入风险）
 case "$TARGET" in
     "~")   TARGET="$HOME" ;;
-    "~/"*) TARGET="$HOME/${TARGET#~/}" ;;
+    "~/"*) TARGET="$HOME/${TARGET#"~/"}" ;;
 esac
 if [[ ! -d "$TARGET" ]]; then
     echo "DIRTY:no-dir"
@@ -1023,7 +1023,7 @@ set -u
 TARGET="$1"
 case "$TARGET" in
     "~")   TARGET="$HOME" ;;
-    "~/"*) TARGET="$HOME/${TARGET#~/}" ;;
+    "~/"*) TARGET="$HOME/${TARGET#"~/"}" ;;
 esac
 cd "$TARGET" 2>/dev/null || { echo "REMOTE_FP:"; exit 0; }
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -1071,7 +1071,7 @@ set -u
 TARGET="$1"
 case "$TARGET" in
     "~")   TARGET="$HOME" ;;
-    "~/"*) TARGET="$HOME/${TARGET#~/}" ;;
+    "~/"*) TARGET="$HOME/${TARGET#"~/"}" ;;
 esac
 if [[ -d "$TARGET/.git" ]]; then
     cat > "$TARGET/.git/.sync_handoff_mark" <<EOF
@@ -1151,7 +1151,7 @@ set -u
 TARGET="$1"
 case "$TARGET" in
     "~")   TARGET="$HOME" ;;
-    "~/"*) TARGET="$HOME/${TARGET#~/}" ;;
+    "~/"*) TARGET="$HOME/${TARGET#"~/"}" ;;
 esac
 if [[ ! -d "$TARGET" ]]; then
     echo "EXISTS:false"
