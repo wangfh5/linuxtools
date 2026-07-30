@@ -4,7 +4,8 @@
 
 ## 工具列表
 
-### [sync-remote](./sync/)
+### [sync-remote](./remote/)
+
 远程服务器文件同步工具，基于 rsync 的双向同步封装脚本。
 
 **核心特性**：相对路径镜像 - 自动同步到远程对应目录，无需指定路径参数。
@@ -14,11 +15,21 @@ sync-remote              # 推送到远程
 sync-remote -m pull      # 从远程拉取
 ```
 
-详见 [sync/README.md](./sync/README.md)
+### [run-remote](./remote/)
+
+远程命令执行工具，通过 SSH 在当前项目的远端镜像目录运行任意命令。
+
+```bash
+run-remote make                 # 在远端镜像目录构建
+run-remote sbatch job.sub       # 提交 Slurm 作业
+run-remote -n echo hello        # 预览 SSH 命令
+```
+
+详见 [remote/README.md](./remote/README.md)
 
 ### [asmgr](./asmgr/)
-`~/agent-settings` 中央配置仓库的命令行管家：统一管理 skills、subagents、项目局域清单与
-Claude Code plugin/marketplace。
+
+`~/agent-settings` 中央配置仓库的命令行管家：统一管理 skills、subagents、项目局域清单与 Claude Code plugin/marketplace。
 
 **核心特性**：中央存储 + 符号链接，跨 cursor/claude-code/codex/gemini/opencode/pi/omp，统一 scope 模型。
 
@@ -52,6 +63,8 @@ brew install yq
 ./setup.sh
 ```
 
+从旧版 `sync/` 目录结构升级时，请重新运行 `./setup.sh` 以刷新已有的 `sync-remote` 符号链接。
+
 或手动安装到 `~/bin/` 目录：
 
 ```bash
@@ -60,8 +73,9 @@ mkdir -p ~/bin
 echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 
-# 安装工具（以 sync-remote 为例）
-ln -sf $(pwd)/sync/sync_to_remote.sh ~/bin/sync-remote
+# 安装 remote 工具
+ln -sf "$(pwd)/remote/sync_remote.sh" ~/bin/sync-remote
+ln -sf "$(pwd)/remote/run_remote.sh" ~/bin/run-remote
 ```
 
 ## 添加新工具

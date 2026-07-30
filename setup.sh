@@ -1,5 +1,5 @@
 #!/bin/bash
-# 一键配置脚本 - 安装 sync-remote 和 asmgr 到全局 PATH
+# 一键配置脚本 - 安装 sync-remote、run-remote 和 asmgr 到全局 PATH
 
 set -e
 
@@ -11,23 +11,28 @@ echo ""
 
 # 1. 创建 ~/bin 目录
 if [[ ! -d "$BIN_DIR" ]]; then
-    echo "[1/3] 创建 $BIN_DIR 目录..."
+    echo "[1/4] 创建 $BIN_DIR 目录..."
     mkdir -p "$BIN_DIR"
 else
-    echo "[1/3] $BIN_DIR 目录已存在"
+    echo "[1/4] $BIN_DIR 目录已存在"
 fi
 
-# 2. 创建符号链接
-echo "[2/3] 创建符号链接..."
+# 2. 安装 remote 工具
+echo "[2/4] 安装 remote 工具..."
 
-ln -sf "$SCRIPT_DIR/sync/sync_to_remote.sh" "$BIN_DIR/sync-remote"
-echo "  ✓ sync-remote -> $SCRIPT_DIR/sync/sync_to_remote.sh"
+ln -sf "$SCRIPT_DIR/remote/sync_remote.sh" "$BIN_DIR/sync-remote"
+echo "  ✓ sync-remote -> $SCRIPT_DIR/remote/sync_remote.sh"
 
+ln -sf "$SCRIPT_DIR/remote/run_remote.sh" "$BIN_DIR/run-remote"
+echo "  ✓ run-remote -> $SCRIPT_DIR/remote/run_remote.sh"
+
+# 3. 安装 asmgr
+echo "[3/4] 安装 asmgr..."
 ln -sf "$SCRIPT_DIR/asmgr/asmgr.sh" "$BIN_DIR/asmgr"
 echo "  ✓ asmgr -> $SCRIPT_DIR/asmgr/asmgr.sh"
 
-# 3. 检查并配置 PATH
-echo "[3/3] 检查 PATH 配置..."
+# 4. 检查并配置 PATH
+echo "[4/4] 检查 PATH 配置..."
 
 # 检测当前 shell 配置文件
 if [[ -n "$ZSH_VERSION" ]] || [[ "$SHELL" == *"zsh"* ]]; then
@@ -60,4 +65,4 @@ echo ""
 echo "=== 配置完成 ==="
 echo ""
 echo "如果 PATH 刚被修改，请运行 source $SHELL_RC 或重新打开终端"
-echo "验证安装: sync-remote -h && asmgr --help"
+echo "验证安装: sync-remote -h && run-remote -h && asmgr --help"

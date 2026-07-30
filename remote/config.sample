@@ -1,0 +1,65 @@
+# remote 工具用户配置示例
+# 文件名: config
+# 位置: ~/.config/remote/config
+# 说明: 定义跨项目的默认设置，会被项目的 .remote_config（或兼容的 .sync_config）覆盖
+
+# ============================================================================
+# 基础配置
+# ============================================================================
+
+# 默认远程服务器（必填 —— 修改为你自己的服务器）
+# 方式1: 直接使用完整地址
+DEFAULT_REMOTE_HOST="user@your-server.example.com"
+DEFAULT_REMOTE_BASE="~"   # 默认同步到远端 $HOME 下的同名相对路径（异树同枝）
+DEFAULT_REMOTE_PORT="22"  # SSH 端口，默认 22
+
+# 角色专用 host（可选）：登录节点执行命令，数据节点传输文件
+# DEFAULT_RUN_HOST="login-node"
+# DEFAULT_SYNC_HOST="data-node"
+
+# 方式2: 使用 ~/.ssh/config 中的 Host alias（推荐）
+# DEFAULT_REMOTE_HOST="myserver"  # 引用 SSH config 中的别名
+# DEFAULT_REMOTE_BASE="~"
+# 注意：使用 SSH alias 时，连接细节可统一放在 ~/.ssh/config 中管理
+
+# 默认同步模式
+DEFAULT_MODE="push"
+
+# ============================================================================
+# 预定义排除规则
+# ============================================================================
+# 为不同类型的项目定义排除规则，在项目的 .remote_config（或 .sync_config）中可以引用这些规则
+
+# Fortran 项目排除规则
+EXCLUDES_FORTRAN=(
+    "--exclude=*.o"
+    "--exclude=*.mod"
+    "--exclude=*.a"
+    "--exclude=*.so"
+)
+
+# Python 项目排除规则  
+EXCLUDES_PYTHON=(
+    "--exclude=__pycache__/"
+    "--exclude=*.pyc"
+    "--exclude=*.pyo"
+    "--exclude=.pytest_cache/"
+    "--exclude=venv/"
+    "--exclude=.venv/"
+)
+
+# C/C++ 项目排除规则
+EXCLUDES_CPP=(
+    "--exclude=*.o"
+    "--exclude=*.a"
+    "--exclude=*.so"
+    "--exclude=build/"
+    "--exclude=cmake-build-*/"
+)
+
+# 通用排除规则
+EXCLUDES_COMMON=(
+    "--exclude=.git/"
+    "--exclude=.DS_Store"
+    "--exclude=Thumbs.db"
+)
