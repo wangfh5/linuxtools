@@ -65,9 +65,9 @@ detect_remote_paths() {
     HOME_PATH="$HOME"
 
     if [[ "$LOCAL_PATH" != "$HOME_PATH" && "$LOCAL_PATH" != "$HOME_PATH/"* ]]; then
-        echo "错误: 当前目录不在用户家目录下"
-        echo "当前目录: $LOCAL_PATH"
-        echo "家目录: $HOME_PATH"
+        echo "错误: 当前目录不在用户家目录下" >&2
+        echo "当前目录: $LOCAL_PATH" >&2
+        echo "家目录: $HOME_PATH" >&2
         exit 1
     fi
 
