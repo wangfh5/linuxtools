@@ -271,28 +271,9 @@ git_shell_quote() {
     printf '%q' "$1"
 }
 
-# 本地 tracked 是否 dirty（untracked 忽略）
-git_local_tracked_dirty() {
-    if ! git rev-parse --is-inside-work-tree &>/dev/null; then
-        return 1
-    fi
-    if ! git diff --quiet HEAD 2>/dev/null; then
-        return 0
-    fi
-    if ! git diff --quiet --cached 2>/dev/null; then
-        return 0
-    fi
-    return 1
-}
-
-# 任一侧 tracked dirty 则报错退出（equal HEAD 也必须查）
-git_require_both_clean() {
-    local op="${1:-同步}"
-    if git_local_tracked_dirty; then
-        echo "错误: 本地有未提交的 tracked 改动，拒绝${op}"
-        echo "       请先 commit / stash，或确认工作区干净"
-        exit 1
-    fi
+# push 会经 updateInstead 改远端工作树：远端 tracked dirty 则预拒（本地 dirty 不拦，对齐原生 git push）
+git_require_remote_clean_for_push() {
+    local op="${1:-push}"
     if [[ "$GIT_REMOTE_DIRTY" == "true" ]]; then
         echo "错误: 远端有未提交的 tracked 改动，拒绝${op}"
         echo "       请在远端 commit / stash / checkout -- . 后再试"
@@ -341,7 +322,7 @@ if [[ ! -d "$TARGET" ]]; then
     echo "DIRTY_TRACKED:false"
     exit 0
 fi
-ABS=$(cd "$TARGET" 2>/dev/null && pwd)
+ABS=$(cd "$TARGET" 2>/dev/null && pwd -P)
 echo "EXISTS:true"
 echo "ABS_PATH:$ABS"
 if ! git -C "$ABS" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -353,7 +334,11 @@ if ! git -C "$ABS" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     exit 0
 fi
 echo "IS_GIT:true"
-echo "TOPLEVEL:$(git -C "$ABS" rev-parse --show-toplevel 2>/dev/null || echo "")"
+TOP=$(git -C "$ABS" rev-parse --show-toplevel 2>/dev/null || echo "")
+if [[ -n "$TOP" ]]; then
+    TOP=$(cd "$TOP" 2>/dev/null && pwd -P 2>/dev/null || echo "$TOP")
+fi
+echo "TOPLEVEL:$TOP"
 echo "HEAD:$(git -C "$ABS" rev-parse HEAD 2>/dev/null || echo "")"
 echo "BRANCH:$(git -C "$ABS" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
 if git -C "$ABS" diff --quiet HEAD 2>/dev/null && git -C "$ABS" diff --quiet --cached 2>/dev/null; then
@@ -561,7 +546,7 @@ git_remote_enable_update_instead() {
 
 # 动作：ff push（调用前已 preflight，关系应为 local_ahead）
 git_do_ff_push() {
-    git_require_both_clean "push"
+    git_require_remote_clean_for_push "push"
 
     if [[ "$DRY_RUN" == "true" ]]; then
         echo "预览: 将 ff-push ${GIT_LOCAL_HEAD:0:12} → 远端 $GIT_REMOTE_BRANCH"
@@ -588,7 +573,7 @@ git_do_ff_push() {
 
 # 动作：force-with-lease 覆盖远端（本地权威；丢弃远端独有 commits）
 git_do_force_push() {
-    git_require_both_clean "force-push"
+    git_require_remote_clean_for_push "force-push"
 
     if [[ "$DRY_RUN" == "true" ]]; then
         echo "预览: 将 force-with-lease push ${GIT_LOCAL_HEAD:0:12} → 远端 $GIT_REMOTE_BRANCH"
@@ -618,9 +603,8 @@ git_do_force_push() {
 }
 
 # 动作：ff pull（调用前已 preflight，关系应为 remote_ahead）
+# 本地/远端 dirty 均不预拒：对齐原生 git pull；与入站冲突时由 merge 失败
 git_do_ff_pull() {
-    git_require_both_clean "pull"
-
     if [[ "$DRY_RUN" == "true" ]]; then
         echo "预览: 将 ff-merge 远端 ${GIT_REMOTE_HEAD:0:12} → 本地 $GIT_LOCAL_BRANCH"
         echo "       （不会修改任何 ref / 工作树）"
@@ -642,6 +626,7 @@ git_do_ff_pull() {
         fi
     else
         echo "错误: git merge --ff-only 失败"
+        echo "       若本地改动与入站 commits 重叠，请先 commit / stash 后再试"
         exit 1
     fi
 }
@@ -656,7 +641,6 @@ perform_git_push() {
 
     case "$GIT_RELATION" in
         equal)
-            git_require_both_clean "push"
             echo "已同步，无需 push"
             return 0
             ;;
@@ -703,7 +687,6 @@ perform_git_pull() {
 
     case "$GIT_RELATION" in
         equal)
-            git_require_both_clean "pull"
             echo "已同步，无需 pull"
             return 0
             ;;
@@ -741,7 +724,6 @@ perform_git_sync() {
 
     case "$GIT_RELATION" in
         equal)
-            git_require_both_clean "sync"
             echo "已同步，无需操作"
             return 0
             ;;

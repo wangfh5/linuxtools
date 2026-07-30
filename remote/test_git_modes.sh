@@ -232,14 +232,15 @@ assert_eq "HEAD 对齐" "$lh" "$(remote_head)"
 if [[ -f "$REMOTE_PROJ/dqmc.out" ]]; then pass "untracked 仍在"; else fail "untracked 丢失"; fi
 
 # ════════════════════════════════════════════════════════════════
-note "GP07 local tracked dirty"
+note "GP07 local tracked dirty → push 仍成功"
 init_pair_same_commit
 advance_local "L4"
 echo dirty-local >> "$LOCAL_PROJ/a.txt"
-rh=$(remote_head)
+lh=$(local_head)
 run_sync git-push
-assert_fail "本地 dirty 拒绝 push" "$LAST_EC" "$LAST_OUT"
-assert_eq "远端未变" "$rh" "$(remote_head)"
+assert_ok "本地 dirty 不拦 push" "$LAST_EC" "$LAST_OUT"
+assert_eq "远端对齐" "$lh" "$(remote_head)"
+if grep -q 'dirty-local' "$LOCAL_PROJ/a.txt"; then pass "本地 dirty 仍在"; else fail "本地 dirty 丢失"; fi
 
 # ════════════════════════════════════════════════════════════════
 note "GL01 remote ahead clean"
@@ -273,14 +274,36 @@ assert_eq "本地不变" "$lh" "$(local_head)"
 assert_eq "远端不变" "$rh" "$(remote_head)"
 
 # ════════════════════════════════════════════════════════════════
-note "GL04 local tracked dirty"
+note "GL04 local dirty 无重叠 → pull 成功"
 init_pair_same_commit
-advance_remote "Rdirty"
-echo x >> "$LOCAL_PROJ/a.txt"
+# 两端先共有 b.txt，再远端只推进 b、本地只脏 a
+printf 'base-b\n' > "$LOCAL_PROJ/b.txt"
+git -C "$LOCAL_PROJ" add b.txt
+git -C "$LOCAL_PROJ" commit -m "add b" >/dev/null
+run_sync git-push
+assert_ok "准备基线 push" "$LAST_EC" "$LAST_OUT"
+echo remote-b >> "$REMOTE_PROJ/b.txt"
+git -C "$REMOTE_PROJ" add b.txt
+git -C "$REMOTE_PROJ" commit -m "Rdirty-b" >/dev/null
+echo local-a >> "$LOCAL_PROJ/a.txt"
+rh=$(remote_head)
+run_sync git-pull
+assert_ok "无重叠 dirty pull 成功" "$LAST_EC" "$LAST_OUT"
+assert_eq "HEAD 对齐" "$rh" "$(local_head)"
+if grep -q 'local-a' "$LOCAL_PROJ/a.txt"; then pass "本地 a dirty 保留"; else fail "本地 a dirty 丢失"; fi
+if grep -q 'remote-b' "$LOCAL_PROJ/b.txt"; then pass "远端 b 已并入"; else fail "远端 b 未并入"; fi
+
+# ════════════════════════════════════════════════════════════════
+note "GL04b local dirty 重叠 → pull 拒"
+init_pair_same_commit
+advance_remote "Roverlap"
+echo local-overlap >> "$LOCAL_PROJ/a.txt"
 rh=$(remote_head); lh=$(local_head)
 run_sync git-pull
-assert_fail "本地 dirty 拒绝 pull" "$LAST_EC" "$LAST_OUT"
+assert_fail "重叠 dirty pull 失败" "$LAST_EC" "$LAST_OUT"
 assert_eq "本地 HEAD 不变" "$lh" "$(local_head)"
+assert_eq "远端 HEAD 不变" "$rh" "$(remote_head)"
+if grep -q 'local-overlap' "$LOCAL_PROJ/a.txt"; then pass "重叠 dirty 仍在"; else fail "重叠 dirty 丢失"; fi
 
 # ════════════════════════════════════════════════════════════════
 note "GL05 local untracked only"
@@ -446,30 +469,36 @@ assert_ok "sync -f 强推" "$LAST_EC" "$LAST_OUT"
 assert_eq "远端=本地" "$lh" "$(remote_head)"
 
 # ════════════════════════════════════════════════════════════════
-note "EQ01 equal + local dirty"
+note "EQ01 equal + local dirty → 已同步"
 init_pair_same_commit
 echo dirt >> "$LOCAL_PROJ/a.txt"
+lh=$(local_head)
 run_sync git-push
-assert_fail "equal 本地 dirty 拒" "$LAST_EC" "$LAST_OUT"
-assert_contains "本地 dirty 提示" "$LAST_OUT" "本地有未提交"
+assert_ok "equal 本地 dirty 不拒" "$LAST_EC" "$LAST_OUT"
+assert_contains "无需 push" "$LAST_OUT" "已同步"
+assert_eq "HEAD 不变" "$lh" "$(local_head)"
 
 # ════════════════════════════════════════════════════════════════
-note "EQ02 equal + remote dirty"
+note "EQ02 equal + remote dirty → 已同步"
 init_pair_same_commit
 echo dirt >> "$REMOTE_PROJ/a.txt"
+rh=$(remote_head)
 run_sync git-pull
-assert_fail "equal 远端 dirty 拒" "$LAST_EC" "$LAST_OUT"
-assert_contains "远端 dirty 提示" "$LAST_OUT" "远端有未提交"
+assert_ok "equal 远端 dirty 不拒" "$LAST_EC" "$LAST_OUT"
+assert_contains "无需 pull" "$LAST_OUT" "已同步"
+assert_eq "远端 HEAD 不变" "$rh" "$(remote_head)"
 
 # ════════════════════════════════════════════════════════════════
-note "PL01 remote ahead + remote dirty → pull 拒"
+note "PL01 remote ahead + remote dirty → pull 仍成功"
 init_pair_same_commit
 advance_remote "Rpl"
 echo dirt >> "$REMOTE_PROJ/a.txt"
-rh=$(remote_head); lh=$(local_head)
+rh=$(remote_head)
 run_sync git-pull
-assert_fail "pull 远端 dirty 拒" "$LAST_EC" "$LAST_OUT"
-assert_eq "本地 HEAD 不变" "$lh" "$(local_head)"
+assert_ok "pull 忽略远端 dirty" "$LAST_EC" "$LAST_OUT"
+assert_eq "本地 HEAD=远端 tip" "$rh" "$(local_head)"
+# 远端工作树 dirty 仍在（pull 不碰远端）
+if grep -q 'dirt' "$REMOTE_PROJ/a.txt"; then pass "远端 dirty 仍在"; else fail "远端 dirty 被改"; fi
 
 # ════════════════════════════════════════════════════════════════
 note "RT01 子目录调用失败"

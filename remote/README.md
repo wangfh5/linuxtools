@@ -109,7 +109,7 @@ rsync 类模式的过滤规则继续沿用 `config.sample` 和 `remote_config.sa
 
 - **通道**：经已有 SSH 直连远端仓库（`host:绝对或可展开路径`），**不经 GitHub**，无需远端代理或 PAT。
 - **只传 commits**：不传 untracked / 未提交改动；两端仅有 untracked（如 `dqmc.out`）不阻止同步。
-- **默认 ff-only**：任一侧 tracked dirty、历史分叉、分支名不一致、不在仓库根目录 → 拒绝。HEAD 相同但工作区脏也会拒绝（不会误报「已同步」）。
+- **默认 ff-only**：历史分叉、分支名不一致、不在仓库根目录 → 拒绝。工作区 dirty 对齐原生 git：本地 dirty 不拦 push/pull（pull 时与入站重叠则由 `merge` 失败）；远端 dirty 只拦 push（`updateInstead` 会改远端工作树），不拦 pull。HEAD 相同即报「已同步」，不因 dirty 误失败。
 - **`-f` / `--force`（仅 git-push / git-sync）**：远端超前或分叉时用 `git push --force-with-lease`，**以本地为权威**覆盖远端分支与工作树，**丢弃远端独有 commits**（不是 rebase）。lease 锚定探测到的远端 tip，降低误盖他人新推送的风险。`git-pull` 忽略 `-f`。
 - **工作树**：push 前将远端设为 `receive.denyCurrentBranch=updateInstead`，使非 bare 当前分支在更新后同步文件。
 - **remote 名**：本地使用名为 `sync-remote` 的 git remote（不存在则创建，存在则更新 URL），不改动 `origin`。
