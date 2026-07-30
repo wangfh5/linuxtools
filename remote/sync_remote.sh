@@ -138,16 +138,24 @@ show_help() {
                           reclaim:   归队：从远端把 handoff 出去的现场拉回本地
                                      (按 marker 找回 fork 槽位；校验本地自 handoff
                                      起未被改动，否则拒绝覆盖)
+                          git-push:  仅推送本地超前的 commits（SSH 直连远端仓库，
+                                     ff-only 更新远端工作树；不经 GitHub）
+                          git-pull:  仅快进拉取远端超前的 commits
+                          git-sync:  谁超前就单向 ff 推/拉；diverged 则拒绝
 
     -H, --host HOST        远程 SSH host，例如 myserver 或 user@host
                           (默认: DEFAULT_SYNC_HOST，未设置时使用 DEFAULT_REMOTE_HOST)
     -p, --port PORT        SSH 端口 (默认: 配置文件中的 DEFAULT_REMOTE_PORT，通常是 22)
     -n, --dry-run          预览模式，不实际执行
         --suffix SUFFIX    handoff 模式 fork 槽位时的后缀名（默认: 时间戳）
-    -f, --force            handoff/reclaim 模式跳过所有安全检查，强制覆盖（慎用）
+    -f, --force            handoff/reclaim: 跳过安全检查强制覆盖（慎用）
+                           git-push/git-sync: 分叉或远端超前时用
+                           --force-with-lease 以本地为权威覆盖远端
+                           （git-pull 忽略 -f，仍仅 ff-only）
         --include-only PATTERN
                            仅同步匹配 PATTERN 的内容（可重复传入，追加到配置文件的
                            INCLUDE_ONLY 之后）；优先级最高，会忽略所有 EXCLUDE 规则
+                           （对 git-* 模式无效）
     -h, --help             显示此帮助信息
 
 示例:
@@ -156,6 +164,10 @@ show_help() {
     $0 -m copy-push        # 本地复制到远程，不删除
     $0 -m handoff          # 接力现场到远程（自动判断原位或 fork）
     $0 -m reclaim          # 从远端归队（自动找 fork 槽位，刷新 pairing marker）
+    $0 -m git-push         # 把本地已 commit 的超前历史 ff 推到远端
+    $0 -m git-push -f       # 分叉时 force-with-lease 覆盖远端（本地权威）
+    $0 -m git-pull         # 把远端超前历史 ff 拉到本地
+    $0 -m git-sync         # 自动单向 ff；diverged 时加 -f 则本地权威强推
     $0 -H myserver -m handoff  # 临时指定远程 SSH host
     $0 -m handoff --suffix mobile  # fork 时用 "mobile" 作为槽位后缀
     $0 -n                  # 预览模式
@@ -232,11 +244,529 @@ validate_config() {
 # 验证同步模式
 validate_mode() {
     case "$MODE" in
-        push|pull|copy-push|copy-pull|handoff|reclaim)
+        push|pull|copy-push|copy-pull|handoff|reclaim|git-push|git-pull|git-sync)
             ;;
         *)
             echo "错误: 无效的同步模式 '$MODE'"
-            echo "支持的模式: push, pull, copy-push, copy-pull, handoff, reclaim"
+            echo "支持的模式: push, pull, copy-push, copy-pull, handoff, reclaim, git-push, git-pull, git-sync"
+            exit 1
+            ;;
+    esac
+}
+
+is_git_mode() {
+    case "$MODE" in
+        git-push|git-pull|git-sync) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# 远端仓库目录（配置中的路径，可能含 ~）
+git_remote_dir_raw() {
+    echo "${DEFAULT_REMOTE_BASE}${RELATIVE_PATH}"
+}
+
+# shell 安全引用（路径含空格/元字符时供远端 shell 使用）
+git_shell_quote() {
+    printf '%q' "$1"
+}
+
+# 本地 tracked 是否 dirty（untracked 忽略）
+git_local_tracked_dirty() {
+    if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+        return 1
+    fi
+    if ! git diff --quiet HEAD 2>/dev/null; then
+        return 0
+    fi
+    if ! git diff --quiet --cached 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+# 任一侧 tracked dirty 则报错退出（equal HEAD 也必须查）
+git_require_both_clean() {
+    local op="${1:-同步}"
+    if git_local_tracked_dirty; then
+        echo "错误: 本地有未提交的 tracked 改动，拒绝${op}"
+        echo "       请先 commit / stash，或确认工作区干净"
+        exit 1
+    fi
+    if [[ "$GIT_REMOTE_DIRTY" == "true" ]]; then
+        echo "错误: 远端有未提交的 tracked 改动，拒绝${op}"
+        echo "       请在远端 commit / stash / checkout -- . 后再试"
+        exit 1
+    fi
+}
+
+# 确保专用 remote「sync-remote」指向当前 SSH 镜像路径
+# $1 = 远端绝对路径
+git_ensure_remote() {
+    local abs_path="$1"
+    local url="${REMOTE_HOST}:${abs_path}"
+    if git remote get-url sync-remote &>/dev/null; then
+        git remote set-url sync-remote "$url"
+    else
+        git remote add sync-remote "$url"
+    fi
+    build_ssh_cmd
+    export GIT_SSH_COMMAND="$SSH_CMD"
+}
+
+# SSH 探测远端 git 状态。设置全局：
+#   GIT_REMOTE_EXISTS GIT_REMOTE_IS_GIT GIT_REMOTE_ABS GIT_REMOTE_TOPLEVEL
+#   GIT_REMOTE_HEAD GIT_REMOTE_BRANCH GIT_REMOTE_DIRTY
+probe_remote_git() {
+    local raw_dir
+    raw_dir="$(git_remote_dir_raw)"
+    build_ssh_cmd
+    echo "探测远端 git: $REMOTE_HOST:$raw_dir"
+
+    local PROBE_SCRIPT
+    IFS='' read -r -d '' PROBE_SCRIPT <<'GIT_PROBE' || true
+set -u
+TARGET="$1"
+case "$TARGET" in
+    "~")   TARGET="$HOME" ;;
+    "~/"*) TARGET="$HOME/${TARGET#~/}" ;;
+esac
+if [[ ! -d "$TARGET" ]]; then
+    echo "EXISTS:false"
+    echo "ABS_PATH:"
+    echo "TOPLEVEL:"
+    echo "IS_GIT:false"
+    echo "HEAD:"
+    echo "BRANCH:"
+    echo "DIRTY_TRACKED:false"
+    exit 0
+fi
+ABS=$(cd "$TARGET" 2>/dev/null && pwd)
+echo "EXISTS:true"
+echo "ABS_PATH:$ABS"
+if ! git -C "$ABS" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "TOPLEVEL:"
+    echo "IS_GIT:false"
+    echo "HEAD:"
+    echo "BRANCH:"
+    echo "DIRTY_TRACKED:false"
+    exit 0
+fi
+echo "IS_GIT:true"
+echo "TOPLEVEL:$(git -C "$ABS" rev-parse --show-toplevel 2>/dev/null || echo "")"
+echo "HEAD:$(git -C "$ABS" rev-parse HEAD 2>/dev/null || echo "")"
+echo "BRANCH:$(git -C "$ABS" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
+if git -C "$ABS" diff --quiet HEAD 2>/dev/null && git -C "$ABS" diff --quiet --cached 2>/dev/null; then
+    echo "DIRTY_TRACKED:false"
+else
+    echo "DIRTY_TRACKED:true"
+fi
+GIT_PROBE
+
+    # 整条远端命令作为单一 ssh 参数；路径用 %q，避免 OpenSSH 拼接后再被 shell 拆词
+    local PROBE_RESULT qraw
+    qraw="$(git_shell_quote "$raw_dir")"
+    PROBE_RESULT=$(printf '%s' "$PROBE_SCRIPT" | $SSH_CMD "$REMOTE_HOST" "bash -s -- ${qraw}") || true
+
+    if [[ -z "$PROBE_RESULT" ]]; then
+        echo "错误: 无法连接远端或探测 git 状态失败"
+        exit 1
+    fi
+
+    GIT_REMOTE_EXISTS="false"
+    GIT_REMOTE_IS_GIT="false"
+    GIT_REMOTE_ABS=""
+    GIT_REMOTE_TOPLEVEL=""
+    GIT_REMOTE_HEAD=""
+    GIT_REMOTE_BRANCH=""
+    GIT_REMOTE_DIRTY="false"
+    while IFS= read -r line; do
+        case "$line" in
+            EXISTS:*)        GIT_REMOTE_EXISTS="${line#EXISTS:}" ;;
+            IS_GIT:*)        GIT_REMOTE_IS_GIT="${line#IS_GIT:}" ;;
+            ABS_PATH:*)      GIT_REMOTE_ABS="${line#ABS_PATH:}" ;;
+            TOPLEVEL:*)      GIT_REMOTE_TOPLEVEL="${line#TOPLEVEL:}" ;;
+            HEAD:*)          GIT_REMOTE_HEAD="${line#HEAD:}" ;;
+            BRANCH:*)        GIT_REMOTE_BRANCH="${line#BRANCH:}" ;;
+            DIRTY_TRACKED:*) GIT_REMOTE_DIRTY="${line#DIRTY_TRACKED:}" ;;
+        esac
+    done <<< "$PROBE_RESULT"
+}
+
+# 在远端执行 git 命令（在 GIT_REMOTE_ABS 下；参数全部 %q，防路径空格/元字符）
+git_remote_cmd() {
+    build_ssh_cmd
+    local qdir qargs=() a
+    qdir="$(git_shell_quote "$GIT_REMOTE_ABS")"
+    for a in "$@"; do
+        qargs+=("$(git_shell_quote "$a")")
+    done
+    # 远端经 shell 解析；整条命令已引用
+    $SSH_CMD "$REMOTE_HOST" "git -C ${qdir} ${qargs[*]}"
+}
+
+# 采集本地 HEAD/分支；必须在仓库根目录
+git_require_local_repo() {
+    if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+        echo "错误: 本地不是 git 仓库"
+        exit 1
+    fi
+    local toplevel cwd
+    toplevel="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+    cwd="$(pwd -P 2>/dev/null || pwd)"
+    if [[ -n "$toplevel" ]]; then
+        toplevel="$(cd "$toplevel" 2>/dev/null && pwd -P 2>/dev/null || echo "$toplevel")"
+    fi
+    if [[ -z "$toplevel" || "$cwd" != "$toplevel" ]]; then
+        echo "错误: 请在 git 仓库根目录执行 git-* 模式（当前不在 root）"
+        echo "       当前: $cwd"
+        echo "       root: ${toplevel:-未知}"
+        exit 1
+    fi
+    GIT_LOCAL_HEAD="$(git rev-parse HEAD 2>/dev/null || true)"
+    GIT_LOCAL_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    if [[ -z "$GIT_LOCAL_HEAD" ]]; then
+        echo "错误: 本地仓库没有 HEAD（是否尚无 commit？）"
+        exit 1
+    fi
+    if [[ "$GIT_LOCAL_BRANCH" == "HEAD" ]]; then
+        echo "错误: 本地处于 detached HEAD，请先 checkout 到命名分支"
+        exit 1
+    fi
+}
+
+# 校验远端 git 可用、是仓库根、并与本地分支名一致
+git_require_remote_repo() {
+    probe_remote_git
+    if [[ "$GIT_REMOTE_EXISTS" != "true" ]]; then
+        echo "错误: 远端路径不存在: $REMOTE_HOST:$(git_remote_dir_raw)"
+        echo "       请先 clone 或 handoff 一次以建立远端仓库"
+        exit 1
+    fi
+    if [[ "$GIT_REMOTE_IS_GIT" != "true" ]]; then
+        echo "错误: 远端不是 git 仓库: $REMOTE_HOST:$GIT_REMOTE_ABS"
+        echo "       请先 clone 或 handoff 一次以建立远端仓库"
+        exit 1
+    fi
+    if [[ -z "$GIT_REMOTE_HEAD" ]]; then
+        echo "错误: 远端仓库没有 HEAD"
+        exit 1
+    fi
+    if [[ "$GIT_REMOTE_BRANCH" == "HEAD" || -z "$GIT_REMOTE_BRANCH" ]]; then
+        echo "错误: 远端处于 detached HEAD 或无法解析分支名"
+        exit 1
+    fi
+    if [[ -z "$GIT_REMOTE_TOPLEVEL" || "$GIT_REMOTE_ABS" != "$GIT_REMOTE_TOPLEVEL" ]]; then
+        echo "错误: 远端映射路径不是 git 仓库根目录"
+        echo "       映射: $GIT_REMOTE_ABS"
+        echo "       root: ${GIT_REMOTE_TOPLEVEL:-未知}"
+        echo "       请在仓库根对应的镜像目录执行"
+        exit 1
+    fi
+    if [[ "$GIT_LOCAL_BRANCH" != "$GIT_REMOTE_BRANCH" ]]; then
+        echo "错误: 本地与远端当前分支名不一致"
+        echo "       本地: $GIT_LOCAL_BRANCH"
+        echo "       远端: $GIT_REMOTE_BRANCH"
+        echo "       请先 checkout 到同名分支后再同步"
+        exit 1
+    fi
+}
+
+# 一次 preflight：本地 root + 远端 probe + 关系分类
+git_preflight() {
+    git_require_local_repo
+    git_require_remote_repo
+    git_classify_relation
+    git_print_relation_summary
+    echo
+}
+
+# 判定关系: equal | local_ahead | remote_ahead | diverged | unknown
+# 必要时 fetch 远端分支到 refs/remotes/sync-remote/<branch>（dry-run 不 fetch）
+git_classify_relation() {
+    local lh="$GIT_LOCAL_HEAD"
+    local rh="$GIT_REMOTE_HEAD"
+
+    if [[ "$lh" == "$rh" ]]; then
+        GIT_RELATION="equal"
+        return
+    fi
+
+    local local_has_remote=false
+    if git cat-file -e "${rh}^{commit}" 2>/dev/null; then
+        local_has_remote=true
+    fi
+
+    if [[ "$local_has_remote" != "true" && "$DRY_RUN" != "true" ]]; then
+        git_ensure_remote "$GIT_REMOTE_ABS"
+        echo "fetch 远端分支以判定历史关系: $GIT_REMOTE_BRANCH"
+        git fetch sync-remote "refs/heads/${GIT_REMOTE_BRANCH}:refs/remotes/sync-remote/${GIT_REMOTE_BRANCH}" || {
+            echo "错误: git fetch 失败"
+            exit 1
+        }
+        if git cat-file -e "${rh}^{commit}" 2>/dev/null; then
+            local_has_remote=true
+        fi
+    fi
+
+    if [[ "$local_has_remote" == "true" ]]; then
+        if git merge-base --is-ancestor "$rh" "$lh" 2>/dev/null; then
+            GIT_RELATION="local_ahead"
+            return
+        fi
+        if git merge-base --is-ancestor "$lh" "$rh" 2>/dev/null; then
+            GIT_RELATION="remote_ahead"
+            return
+        fi
+        GIT_RELATION="diverged"
+        return
+    fi
+
+    # 本地没有远端 tip：看远端是否已有本地 tip
+    if git_remote_cmd cat-file -e "${lh}^{commit}" 2>/dev/null; then
+        if git_remote_cmd merge-base --is-ancestor "$lh" "$rh" 2>/dev/null; then
+            GIT_RELATION="remote_ahead"
+            return
+        fi
+        if git_remote_cmd merge-base --is-ancestor "$rh" "$lh" 2>/dev/null; then
+            GIT_RELATION="local_ahead"
+            return
+        fi
+        GIT_RELATION="diverged"
+        return
+    fi
+
+    # 两边互不认识对方 tip
+    if [[ "$DRY_RUN" == "true" ]]; then
+        GIT_RELATION="unknown"
+        return
+    fi
+    GIT_RELATION="diverged"
+}
+
+git_print_relation_summary() {
+    echo "本地: $GIT_LOCAL_BRANCH @ ${GIT_LOCAL_HEAD:0:12}"
+    echo "远端: $GIT_REMOTE_BRANCH @ ${GIT_REMOTE_HEAD:0:12} ($REMOTE_HOST:$GIT_REMOTE_ABS)"
+    echo "关系: $GIT_RELATION"
+}
+
+# 远端允许 push 到当前分支并更新工作树
+git_remote_enable_update_instead() {
+    git_remote_cmd config receive.denyCurrentBranch updateInstead || {
+        echo "错误: 无法设置远端 receive.denyCurrentBranch=updateInstead"
+        echo "       请确认远端 git 版本支持该选项"
+        exit 1
+    }
+}
+
+# 动作：ff push（调用前已 preflight，关系应为 local_ahead）
+git_do_ff_push() {
+    git_require_both_clean "push"
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "预览: 将 ff-push ${GIT_LOCAL_HEAD:0:12} → 远端 $GIT_REMOTE_BRANCH"
+        echo "       （不会修改任何 ref / 工作树）"
+        return 0
+    fi
+
+    git_ensure_remote "$GIT_REMOTE_ABS"
+    git_remote_enable_update_instead
+    echo "push $GIT_LOCAL_BRANCH → $REMOTE_HOST:$GIT_REMOTE_ABS"
+    if git push sync-remote "HEAD:refs/heads/${GIT_LOCAL_BRANCH}"; then
+        echo "git-push 完成"
+        local new_rh
+        new_rh=$(git_remote_cmd rev-parse HEAD 2>/dev/null || true)
+        if [[ "$new_rh" != "$GIT_LOCAL_HEAD" ]]; then
+            echo "警告: push 后远端 HEAD=$new_rh，期望 $GIT_LOCAL_HEAD"
+            exit 1
+        fi
+    else
+        echo "错误: git push 失败"
+        exit 1
+    fi
+}
+
+# 动作：force-with-lease 覆盖远端（本地权威；丢弃远端独有 commits）
+git_do_force_push() {
+    git_require_both_clean "force-push"
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "预览: 将 force-with-lease push ${GIT_LOCAL_HEAD:0:12} → 远端 $GIT_REMOTE_BRANCH"
+        echo "       lease 期望远端 tip=${GIT_REMOTE_HEAD:0:12}"
+        echo "       （远端独有 commits 将被丢弃；不会实际修改）"
+        return 0
+    fi
+
+    git_ensure_remote "$GIT_REMOTE_ABS"
+    git_remote_enable_update_instead
+    echo "force-with-lease push $GIT_LOCAL_BRANCH → $REMOTE_HOST:$GIT_REMOTE_ABS"
+    echo "  lease: refs/heads/${GIT_LOCAL_BRANCH}:${GIT_REMOTE_HEAD:0:12}"
+    if git push --force-with-lease="refs/heads/${GIT_LOCAL_BRANCH}:${GIT_REMOTE_HEAD}" \
+        sync-remote "HEAD:refs/heads/${GIT_LOCAL_BRANCH}"; then
+        echo "git-push -f 完成（本地权威）"
+        local new_rh
+        new_rh=$(git_remote_cmd rev-parse HEAD 2>/dev/null || true)
+        if [[ "$new_rh" != "$GIT_LOCAL_HEAD" ]]; then
+            echo "警告: force-push 后远端 HEAD=$new_rh，期望 $GIT_LOCAL_HEAD"
+            exit 1
+        fi
+    else
+        echo "错误: git push --force-with-lease 失败"
+        echo "       若 tip 在探测后被他人更新，lease 会拒绝；请重试或检查远端"
+        exit 1
+    fi
+}
+
+# 动作：ff pull（调用前已 preflight，关系应为 remote_ahead）
+git_do_ff_pull() {
+    git_require_both_clean "pull"
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "预览: 将 ff-merge 远端 ${GIT_REMOTE_HEAD:0:12} → 本地 $GIT_LOCAL_BRANCH"
+        echo "       （不会修改任何 ref / 工作树）"
+        return 0
+    fi
+
+    git_ensure_remote "$GIT_REMOTE_ABS"
+    echo "fetch + ff-only merge $GIT_REMOTE_BRANCH"
+    git fetch sync-remote "refs/heads/${GIT_REMOTE_BRANCH}:refs/remotes/sync-remote/${GIT_REMOTE_BRANCH}" || {
+        echo "错误: git fetch 失败"
+        exit 1
+    }
+    if git merge --ff-only "refs/remotes/sync-remote/${GIT_REMOTE_BRANCH}"; then
+        echo "git-pull 完成"
+        local new_lh
+        new_lh=$(git rev-parse HEAD)
+        if [[ "$new_lh" != "$GIT_REMOTE_HEAD" ]]; then
+            echo "本地 HEAD 已更新为 $new_lh"
+        fi
+    else
+        echo "错误: git merge --ff-only 失败"
+        exit 1
+    fi
+}
+
+perform_git_push() {
+    if [[ "$HANDOFF_FORCE" == "true" ]]; then
+        echo "=== git-push：本地 → 远端（可用 -f force-with-lease）==="
+    else
+        echo "=== git-push：本地 commits → 远端（ff-only）==="
+    fi
+    git_preflight
+
+    case "$GIT_RELATION" in
+        equal)
+            git_require_both_clean "push"
+            echo "已同步，无需 push"
+            return 0
+            ;;
+        local_ahead)
+            git_do_ff_push
+            ;;
+        remote_ahead|diverged)
+            if [[ "$HANDOFF_FORCE" == "true" ]]; then
+                if [[ "$GIT_RELATION" == "remote_ahead" ]]; then
+                    echo "提示: 远端超前，-f 将以本地为权威覆盖远端（丢弃远端独有 commits）"
+                else
+                    echo "提示: 历史分叉，-f 将以本地为权威 force-with-lease 覆盖远端"
+                fi
+                git_do_force_push
+            else
+                if [[ "$GIT_RELATION" == "remote_ahead" ]]; then
+                    echo "错误: 远端超前于本地，拒绝 push"
+                    echo "       建议: sync-remote -m git-pull 或 git-sync"
+                    echo "       或以本地为权威: sync-remote -m git-push -f"
+                else
+                    echo "错误: 本地与远端历史已分叉，拒绝 push（默认仅 ff-only）"
+                    echo "       建议: 手动 rebase/merge；或以本地为权威: sync-remote -m git-push -f"
+                fi
+                exit 1
+            fi
+            ;;
+        unknown)
+            echo "预览: 本地缺少远端对象，实际运行将先 fetch 再判定"
+            return 0
+            ;;
+        *)
+            echo "错误: 未知关系 '$GIT_RELATION'"
+            exit 1
+            ;;
+    esac
+}
+
+perform_git_pull() {
+    echo "=== git-pull：远端 commits → 本地（ff-only）==="
+    if [[ "$HANDOFF_FORCE" == "true" ]]; then
+        echo "提示: git-pull 忽略 -f（不做 force pull）"
+    fi
+    git_preflight
+
+    case "$GIT_RELATION" in
+        equal)
+            git_require_both_clean "pull"
+            echo "已同步，无需 pull"
+            return 0
+            ;;
+        remote_ahead)
+            git_do_ff_pull
+            ;;
+        local_ahead)
+            echo "错误: 本地超前于远端，拒绝 pull"
+            echo "       建议: sync-remote -m git-push 或 git-sync"
+            exit 1
+            ;;
+        diverged)
+            echo "错误: 本地与远端历史已分叉，拒绝 pull（仅支持 ff-only）"
+            echo "       请手动 rebase/merge；若要以本地覆盖远端: sync-remote -m git-push -f"
+            exit 1
+            ;;
+        unknown)
+            echo "预览: 本地缺少远端对象，实际运行将先 fetch 再判定"
+            return 0
+            ;;
+        *)
+            echo "错误: 未知关系 '$GIT_RELATION'"
+            exit 1
+            ;;
+    esac
+}
+
+perform_git_sync() {
+    if [[ "$HANDOFF_FORCE" == "true" ]]; then
+        echo "=== git-sync：单向同步（-f：分叉时本地权威强推）==="
+    else
+        echo "=== git-sync：单向 ff 推或拉 ==="
+    fi
+    git_preflight
+
+    case "$GIT_RELATION" in
+        equal)
+            git_require_both_clean "sync"
+            echo "已同步，无需操作"
+            return 0
+            ;;
+        local_ahead)
+            git_do_ff_push
+            ;;
+        remote_ahead)
+            git_do_ff_pull
+            ;;
+        diverged)
+            if [[ "$HANDOFF_FORCE" == "true" ]]; then
+                echo "提示: 历史分叉，-f 将以本地为权威 force-with-lease 覆盖远端"
+                git_do_force_push
+            else
+                echo "错误: 本地与远端历史已分叉，git-sync 拒绝自动处理"
+                echo "       请手动 rebase/merge；或以本地为权威: sync-remote -m git-sync -f"
+                exit 1
+            fi
+            ;;
+        unknown)
+            echo "预览: 无法在不 fetch 的情况下判定关系；实际运行将 fetch 后自动 push 或 pull"
+            return 0
+            ;;
+        *)
+            echo "错误: 未知关系 '$GIT_RELATION'"
             exit 1
             ;;
     esac
@@ -841,10 +1371,20 @@ main() {
     load_remote_config  # 加载配置文件（用户配置 → 项目配置）
     init_vars        # 基于配置初始化工作变量
     parse_args "$@"  # 解析命令行参数（可覆盖配置；也可向 INCLUDE_ONLY 追加 pattern）
-    merge_excludes   # 合并排除规则（消费配置 + CLI 的 INCLUDE_ONLY）
     validate_config  # 校验 sync 使用的远程 host
     validate_mode    # 验证同步模式
     detect_remote_paths  # 检测路径
+
+    if is_git_mode; then
+        case "$MODE" in
+            git-push) perform_git_push ;;
+            git-pull) perform_git_pull ;;
+            git-sync)  perform_git_sync ;;
+        esac
+        return
+    fi
+
+    merge_excludes   # 合并排除规则（消费配置 + CLI 的 INCLUDE_ONLY）
     if [[ "$MODE" == "handoff" ]]; then
         prepare_handoff  # 检查远端、决定原位或 fork、注入 handoff 规则
     elif [[ "$MODE" == "reclaim" ]]; then

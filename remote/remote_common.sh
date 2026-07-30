@@ -6,7 +6,7 @@
 FALLBACK_REMOTE_HOST=""
 FALLBACK_REMOTE_BASE="~"
 FALLBACK_REMOTE_PORT="22"
-FALLBACK_MODE="push"
+FALLBACK_MODE="pull"
 
 # 加载用户级与项目级配置。新文件名优先，旧文件名保持兼容。
 load_remote_config() {

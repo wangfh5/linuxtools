@@ -8,11 +8,13 @@
 
 远程服务器文件同步工具，基于 rsync 的双向同步封装脚本。
 
-**核心特性**：相对路径镜像 - 自动同步到远程对应目录，无需指定路径参数。
+**核心特性**：相对路径镜像；rsync 双向同步；git-push/pull/sync 经 SSH 只传 commits（不经 GitHub）。
 
 ```bash
 sync-remote              # 推送到远程
 sync-remote -m pull      # 从远程拉取
+sync-remote -m git-push  # 本地超前 commits ff 到远端
+./remote/test_git_modes.sh  # git 模式沙箱回归
 ```
 
 ### [run-remote](./remote/)

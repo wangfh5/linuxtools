@@ -14,16 +14,16 @@ DEFAULT_REMOTE_BASE="~"   # 默认同步到远端 $HOME 下的同名相对路径
 DEFAULT_REMOTE_PORT="22"  # SSH 端口，默认 22
 
 # 角色专用 host（可选）：登录节点执行命令，数据节点传输文件
-# DEFAULT_RUN_HOST="login-node"
-# DEFAULT_SYNC_HOST="data-node"
+# DEFAULT_RUN_HOST="siyuan"
+# DEFAULT_SYNC_HOST="sydata"
 
 # 方式2: 使用 ~/.ssh/config 中的 Host alias（推荐）
 # DEFAULT_REMOTE_HOST="myserver"  # 引用 SSH config 中的别名
 # DEFAULT_REMOTE_BASE="~"
 # 注意：使用 SSH alias 时，连接细节可统一放在 ~/.ssh/config 中管理
 
-# 默认同步模式
-DEFAULT_MODE="push"
+# 默认同步模式（常用：从超算拉回结果）
+DEFAULT_MODE="pull"
 
 # ============================================================================
 # 预定义排除规则
