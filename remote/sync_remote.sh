@@ -48,6 +48,7 @@ git_fingerprint() {
 # 合并排除规则
 merge_excludes() {
     local merged_rules=()
+    local pattern
     
     # 检查是否设置了限定规则（INCLUDE_ONLY）
     # 限定规则优先级最高，会忽略所有排除规则
@@ -56,6 +57,7 @@ merge_excludes() {
         echo "只同步以下匹配的内容:"
         
         for pattern in "${INCLUDE_ONLY[@]}"; do
+            pattern="${pattern%/}"
             echo "  include: $pattern"
             # 包含匹配的目录/文件本身
             merged_rules+=("--include=$pattern")
@@ -159,7 +161,7 @@ show_help() {
     -h, --help             显示此帮助信息
 
 示例:
-    $0                     # 默认: 本地覆盖远程
+    $0                     # 使用配置文件中的 DEFAULT_MODE
     $0 -m pull             # 远程覆盖本地
     $0 -m copy-push        # 本地复制到远程，不删除
     $0 -m handoff          # 接力现场到远程（自动判断原位或 fork）
@@ -269,6 +271,22 @@ git_remote_dir_raw() {
 # shell 安全引用（路径含空格/元字符时供远端 shell 使用）
 git_shell_quote() {
     printf '%q' "$1"
+}
+
+# 引用供远端 shell 执行的路径，同时让开头的 ~ 在远端展开为 $HOME
+shell_quote_remote_path() {
+    case "$1" in
+        "~")
+            printf '"$HOME"'
+            ;;
+        "~/"*)
+            printf '"$HOME"/'
+            git_shell_quote "${1#\~/}"
+            ;;
+        *)
+            git_shell_quote "$1"
+            ;;
+    esac
 }
 
 # push 会经 updateInstead 改远端工作树：远端 tracked dirty 则预拒（本地 dirty 不拦，对齐原生 git push）
@@ -984,9 +1002,11 @@ REMOTE_PROBE
     echo "判定结果: $STATUS"
     echo "原因: $REASON"
     echo "目标: $REMOTE_TARGET"
-    # 仅在 fork 到新槽位时提示 ssh 命令（新路径含自动生成的后缀，用户需要知道）
+    # 仅在 fork 到新槽位时提示登录和远端 cd 步骤
     if [[ "$STATUS" == "dirty" || "$STATUS" == "diverged" ]]; then
-        echo "下一步: ssh $REMOTE_HOST && cd ${REMOTE_TARGET#*:}"
+        echo "下一步（登录后执行第二行）:"
+        echo "  ssh $(git_shell_quote "$REMOTE_HOST")"
+        echo "  cd $(shell_quote_remote_path "${REMOTE_TARGET#*:}")"
     fi
     echo "========================"
     echo

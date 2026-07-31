@@ -11,7 +11,7 @@
 **核心特性**：相对路径镜像；rsync 双向同步；git-push/pull/sync 经 SSH 只传 commits（不经 GitHub）。
 
 ```bash
-sync-remote              # 推送到远程
+sync-remote -m push      # 推送到远程
 sync-remote -m pull      # 从远程拉取
 sync-remote -m git-push  # 本地超前 commits ff 到远端
 ./remote/test_git_modes.sh  # git 模式沙箱回归
