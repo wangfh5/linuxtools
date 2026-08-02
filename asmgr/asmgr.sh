@@ -50,7 +50,7 @@ scope 约定（所有命令通用，决定操作落在哪里）:
     sync --from-agents [-g | -p <dir>]            从现有安装（link/copy）反向重建配置
     sync --from-config [-g | -p <dir> | --all]    从配置正向重建链接（全局 scope 下 config 即真相：删除未声明的游离链接）
     remove <skill> [-a <agents...>] [-s] [-g|-p <dir>]  从指定 scope 移除 skill/subagent
-    remove <skill>（不带 -a/-s/scope）             完全移除（中央目录 + 全局安装 + 配置）
+    remove <skill>（不带 -a/-s/scope）             完全移除（中央目录 + 受管理的全局安装 + 配置）
 
 项目局域清单:
     集中存放在 $PROJECTS_DIR/<name>.yaml（文件名由 \$HOME 相对路径派生，/ → __），
@@ -76,11 +76,11 @@ add 命令参数:
                         可指定多个，用空格分隔；交互模式下不指定则进入 agents 选择器；显式 source 模式下不指定则仅下载到中央目录
 
     -g, --global        全局安装（家目录）
-                        创建 ~/.cursor/skills/, ~/.claude/skills/, ~/.codex/skills/, ~/.gemini/skills/,
+                        创建 ~/.cursor/skills/, ~/.claude/skills/, ~/.agents/skills/, ~/.gemini/skills/,
                              ~/.config/opencode/skills/, ~/.pi/agent/skills/, ~/.omp/agent/skills/
 
     -p, --project <dir> 指定项目根目录（局域安装），默认为当前目录；不能与 -g 同用
-                        创建 <dir>/.cursor/skills/, <dir>/.claude/skills/, <dir>/.codex/skills/,
+                        创建 <dir>/.cursor/skills/, <dir>/.claude/skills/, <dir>/.agents/skills/,
                              <dir>/.gemini/skills/, <dir>/.opencode/skills/, <dir>/.pi/skills/, <dir>/.omp/skills/
 
     -c, --copy          复制模式（复制整个目录而非符号链接），适用于不支持符号链接的 agent
@@ -97,7 +97,7 @@ remove 命令参数:
     -s, --subagent      移除 subagent（从 .claude/agents 解链 + 更新清单）
     -g, --global        从全局安装移除
     -p, --project <dir> 从指定项目移除
-                        不带 -a/-s/-g/-p 时 → 完全移除（中央目录 + 全局安装 + 配置）
+                        不带 -a/-s/-g/-p 时 → 完全移除（中央目录 + 受管理的全局安装 + 配置）
 
 示例:
     # ---- add：scope 由 flag 决定 ----
@@ -138,7 +138,7 @@ remove 命令参数:
 
     # ---- 跨机恢复 / 完全移除 ----
     asmgr sync --from-config --all     # git pull agent-settings 后，一键恢复全局 + 所有项目
-    asmgr remove skill-creator         # 完全移除（中央目录 + 全局安装 + 配置）
+    asmgr remove skill-creator         # 完全移除（中央目录 + 受管理的全局安装 + 配置）
     asmgr remove skill-creator -a cursor -g            # 仅从全局 cursor 移除
     asmgr remove skill-creator -a cursor -p ~/projects/foo  # 仅从指定项目移除
 
@@ -1091,7 +1091,7 @@ resolve_partial_remove_skill_name() {
     return 1
 }
 
-# 完全移除 skill（中央目录 + 所有全局安装 + 配置记录）
+# 完全移除 skill（中央目录 + 所有受管理的全局安装 + 配置记录）
 remove_skill_completely() {
     local skill_name="$1"
     local skill_dir="$SKILLS_DIR/$skill_name"
@@ -1109,7 +1109,7 @@ remove_skill_completely() {
     echo
     echo "将执行以下操作:"
     [[ -d "$skill_dir" ]] && echo "  - 删除中央目录: $skill_dir"
-    echo "  - 删除所有全局安装（link/copy）"
+    echo "  - 删除所有受管理的全局安装（link/copy）"
     echo "  - 从配置文件移除记录"
     echo
     if ! prompt_yes_no "是否移除? (y/N) " "N"; then

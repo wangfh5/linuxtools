@@ -138,7 +138,7 @@ get_agent_dir() {
             echo "$base_dir/.claude/skills"
             ;;
         codex)
-            echo "$base_dir/.codex/skills"
+            echo "$base_dir/.agents/skills"
             ;;
         gemini)
             echo "$base_dir/.gemini/skills"

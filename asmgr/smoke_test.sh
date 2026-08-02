@@ -7,7 +7,7 @@
 #
 # 设计要点：
 #   - 完全沙箱化：每个用例用独立的临时 HOME。asmgr.sh 的所有中央路径
-#     （$HOME/agent-settings/skills|agents|projects、各 agent 的 ~/.{cursor,claude,codex,gemini}
+#     （$HOME/agent-settings/skills|agents|projects、各 agent 的 ~/.{cursor,claude,gemini}、~/.agents
 #      与 ~/.config/opencode、~/.pi/agent、~/.omp/agent）
 #     都从 $HOME 现场派生，所以换 HOME 就把整套工具重定向到沙箱，绝不碰真实 ~/agent-settings。
 #   - 自清理：单一 trap 删除根临时目录。
@@ -116,7 +116,7 @@ seed_agent_dirs() {      # 预建某 base 下各 agent skills 目录 + .claude/a
     mkdir -p \
         "$b/.cursor/skills" \
         "$b/.claude/skills" \
-        "$b/.codex/skills" \
+        "$b/.agents/skills" \
         "$b/.gemini/skills" \
         "$b/.opencode/skills" \
         "$b/.config/opencode/skills" \
@@ -470,9 +470,67 @@ tc_add_copy_global() {
     mk_central_skill "$H" "gamma"
     run add gamma -a codex -g -c
     assert_rc "copy add 退出码 0" 0
-    assert_real_dir "codex 为复制实体目录" "$H/.codex/skills/gamma"
+    assert_real_dir "codex 为复制实体目录" "$H/.agents/skills/gamma"
+    assert_absent "codex 不创建旧路径" "$H/.codex/skills/gamma"
     assert_eq "yaml agents_copy 含 codex" "codex" \
         "$(yq -r '.skills.gamma.agents_copy[]' "$H/agent-settings/skills/skills.yaml")"
+}
+
+tc_codex_legacy_path_ignored() {
+    note "codex：旧 .codex/skills 路径完全不受管理"
+    H=$(new_home); seed_agent_dirs "$H"
+    local yaml="$H/agent-settings/skills/skills.yaml"
+    local src; src=$(mk_src_skill "$TMP_ROOT/codex_legacy_global" "legacy-global")
+    run add "$src" -g
+    mkdir -p "$H/.codex/skills"
+    cp -r "$H/agent-settings/skills/legacy-global" "$H/.codex/skills/legacy-global"
+
+    run status -g
+    assert_rc "旧全局路径不影响 status" 0
+    assert_not_contains "status 不报告旧全局路径" "$OUT" "legacy-global @ codex"
+    run status --fix -g
+    assert_rc "旧全局路径不影响 status --fix" 0
+    assert_real_dir "status --fix 保留旧全局副本" "$H/.codex/skills/legacy-global"
+
+    run sync --from-agents -g
+    assert_rc "sync --from-agents -g 忽略旧全局路径" 0
+    assert_eq "旧全局副本未登记为 codex copy" "0" \
+        "$(yq -r '.skills."legacy-global".agents_copy | length' "$yaml")"
+    run sync --from-config -g
+    assert_rc "sync --from-config -g 忽略旧全局路径" 0
+    assert_real_dir "sync --from-config -g 保留旧全局副本" "$H/.codex/skills/legacy-global"
+
+    runc remove legacy-global
+    assert_rc "完全 remove 退出码 0" 0
+    assert_real_dir "完全 remove 不删除旧全局副本" "$H/.codex/skills/legacy-global"
+
+    H=$(new_home)
+    local proj="$H/codex-legacy-project"; mkdir -p "$proj"; seed_agent_dirs "$proj"
+    local manifest; manifest=$(expected_manifest "$H" "$proj")
+    mk_central_skill "$H" "alpha"
+    mk_central_skill "$H" "legacy-project"
+    run add alpha -a claude-code -p "$proj"
+    mkdir -p "$proj/.codex/skills"
+    cp -r "$H/agent-settings/skills/legacy-project" "$proj/.codex/skills/legacy-project"
+
+    run status -p "$proj"
+    assert_rc "旧项目路径不影响 status" 0
+    assert_not_contains "status 不报告旧项目路径" "$OUT" "legacy-project @ codex"
+    run status --fix -p "$proj"
+    assert_rc "旧项目路径不影响 status --fix" 0
+    assert_real_dir "status --fix 保留旧项目副本" "$proj/.codex/skills/legacy-project"
+
+    run sync --from-agents -p "$proj"
+    assert_rc "sync --from-agents -p 忽略旧项目路径" 0
+    assert_eq "旧项目副本未写入清单" "false" \
+        "$(yq -r '.skills | has("legacy-project")' "$manifest")"
+    run sync --from-config -p "$proj"
+    assert_rc "sync --from-config -p 忽略旧项目路径" 0
+    assert_real_dir "sync --from-config -p 保留旧项目副本" "$proj/.codex/skills/legacy-project"
+
+    run remove legacy-project -a codex -p "$proj"
+    assert_rc_nonzero "项目 remove 不识别旧路径中的安装"
+    assert_real_dir "项目 remove 保留旧项目副本" "$proj/.codex/skills/legacy-project"
 }
 
 tc_opencode_paths_status_and_remove() {
@@ -726,9 +784,9 @@ tc_status_global_copy_wrong_type_fix() {
     H=$(new_home); seed_agent_dirs "$H"
     mk_central_skill "$H" "gamma"
     run add gamma -a codex -g -c                    # 复制模式
-    assert_real_dir "初始为复制实体目录" "$H/.codex/skills/gamma"
-    rm -rf "$H/.codex/skills/gamma"
-    printf 'x\n' > "$H/.codex/skills/gamma"         # 期望 copy，实际是文件
+    assert_real_dir "初始为复制实体目录" "$H/.agents/skills/gamma"
+    rm -rf "$H/.agents/skills/gamma"
+    printf 'x\n' > "$H/.agents/skills/gamma"         # 期望 copy，实际是文件
 
     run status -g
     assert_contains "报告 WRONG" "$OUT" "[WRONG]"
@@ -736,8 +794,8 @@ tc_status_global_copy_wrong_type_fix() {
     assert_rc_nonzero "status -g 有问题返回非零"
     run status --fix -g
     assert_contains "--fix 提示已修复" "$OUT" "已修复"
-    assert_real_dir "已修复为复制实体目录" "$H/.codex/skills/gamma"
-    assert_present "修复确实 cp -r 了内容（含 SKILL.md，而非空目录）" "$H/.codex/skills/gamma/SKILL.md"
+    assert_real_dir "已修复为复制实体目录" "$H/.agents/skills/gamma"
+    assert_present "修复确实 cp -r 了内容（含 SKILL.md，而非空目录）" "$H/.agents/skills/gamma/SKILL.md"
 }
 
 tc_status_global_copy_missing_fix() {
@@ -745,7 +803,7 @@ tc_status_global_copy_missing_fix() {
     H=$(new_home); seed_agent_dirs "$H"
     mk_central_skill "$H" "gamma"
     run add gamma -a codex -g -c
-    rm -rf "$H/.codex/skills/gamma"                 # 配置有，copy 没了
+    rm -rf "$H/.agents/skills/gamma"                 # 配置有，copy 没了
 
     run status -g
     assert_contains "报告 MISSING" "$OUT" "[MISSING]"
@@ -753,8 +811,8 @@ tc_status_global_copy_missing_fix() {
     assert_rc_nonzero "status -g 有问题返回非零"
     run status --fix -g
     assert_contains "--fix 提示已复制" "$OUT" "已复制"
-    assert_real_dir "copy 已重建" "$H/.codex/skills/gamma"
-    assert_present "重建确实 cp -r 了内容（含 SKILL.md，而非空目录）" "$H/.codex/skills/gamma/SKILL.md"
+    assert_real_dir "copy 已重建" "$H/.agents/skills/gamma"
+    assert_present "重建确实 cp -r 了内容（含 SKILL.md，而非空目录）" "$H/.agents/skills/gamma/SKILL.md"
 }
 
 tc_status_global_copy_issue_folds() {
@@ -764,8 +822,8 @@ tc_status_global_copy_issue_folds() {
     run add delta -a cursor -g                      # link 分支: cursor
     run add delta -a codex -g -c                    # copy 分支: codex
     assert_symlink "link 分支就绪 (cursor)" "$H/.cursor/skills/delta"
-    assert_real_dir "copy 分支就绪 (codex)" "$H/.codex/skills/delta"
-    rm -rf "$H/.codex/skills/delta"                 # 只破坏 copy 分支
+    assert_real_dir "copy 分支就绪 (codex)" "$H/.agents/skills/delta"
+    rm -rf "$H/.agents/skills/delta"                 # 只破坏 copy 分支
 
     run status -g
     assert_contains "link 分支仍报告 OK" "$OUT" "[OK]"
@@ -829,19 +887,19 @@ tc_status_global_registry_stale_fix_removes_declared_installs() {
     run add alpha -a cursor -g
     SKILL_KEY="stale" yq -i '.skills[strenv(SKILL_KEY)] = {"agents_link": ["gemini"], "agents_copy": ["codex"], "source": "manual", "updated_at": "2026-01-01T00:00:00+08:00"}' "$yaml"
     ln -s "$H/agent-settings/skills/stale" "$H/.gemini/skills/stale"
-    mkdir -p "$H/.codex/skills/stale"
-    printf 'stale copy\n' > "$H/.codex/skills/stale/data.txt"
+    mkdir -p "$H/.agents/skills/stale"
+    printf 'stale copy\n' > "$H/.agents/skills/stale/data.txt"
 
     run status -g
     assert_rc_nonzero "stale registry 带安装返回非零"
     assert_contains "报告 stale registry 带安装" "$OUT" "stale (skills.yaml 有记录，中央目录不存在)"
     assert_symlink "无 --fix 保留 stale 符号链接" "$H/.gemini/skills/stale"
-    assert_real_dir "无 --fix 保留 stale copy" "$H/.codex/skills/stale"
+    assert_real_dir "无 --fix 保留 stale copy" "$H/.agents/skills/stale"
 
     run status -g --fix
     assert_rc_nonzero "--fix 清理 stale 安装后仍返回非零"
     assert_absent "--fix 删除 stale 符号链接" "$H/.gemini/skills/stale"
-    assert_absent "--fix 删除 stale copy" "$H/.codex/skills/stale"
+    assert_absent "--fix 删除 stale copy" "$H/.agents/skills/stale"
     assert_eq "--fix 删除 stale registry 记录" "false" \
         "$(yq -r '.skills | has("stale")' "$yaml")"
 
@@ -942,7 +1000,8 @@ tc_project_add_default_cwd_in_home() {
     run_in "$proj" add alpha -a claude-code codex
     assert_rc "项目 add 退出码 0" 0
     assert_symlink "项目 claude-code 链接" "$proj/.claude/skills/alpha"
-    assert_symlink "项目 codex 链接" "$proj/.codex/skills/alpha"
+    assert_symlink "项目 codex 链接" "$proj/.agents/skills/alpha"
+    assert_absent "项目 codex 不创建旧路径" "$proj/.codex/skills/alpha"
     assert_present "清单文件按相对名生成 (projwork.yaml)" "$manifest"
     assert_eq "清单 path 为相对" "projwork" "$(yq -r '.path' "$manifest")"
     assert_eq "清单 skills.alpha.agents_link 含 codex" "claude-code"$'\n'"codex" \
@@ -956,7 +1015,7 @@ tc_project_add_default_cwd_in_home() {
 
     # 项目侧 MISSING 是裸文案（"<name> -> <agent>"），不带全局独有的 "(配置有，…)" 后缀——
     # 与全局侧的精确断言相对，把这个 per-scope 文案差异钉成契约，防止被抽象抹平为同一句。
-    rm -f "$proj/.codex/skills/alpha"
+    rm -f "$proj/.agents/skills/alpha"
     run_in "$proj" status
     assert_contains "项目 MISSING 命中 codex" "$OUT" "alpha -> codex"
     assert_not_contains "项目 MISSING 不带全局后缀(配置有)" "$OUT" "(配置有"
@@ -978,7 +1037,7 @@ tc_project_cwd_uses_logical_pwd_for_symlink() {
 
     run_in "$link" add alpha -a codex
     assert_rc "symlink cwd add 退出码 0" 0
-    assert_symlink "symlink cwd 项目链接已建" "$link/.codex/skills/alpha"
+    assert_symlink "symlink cwd 项目链接已建" "$link/.agents/skills/alpha"
     assert_present "清单按逻辑路径生成" "$logical_manifest"
     assert_absent "未按物理路径生成清单" "$physical_manifest"
     assert_eq "清单 path 保留 symlink 路径" "linked-proj" "$(yq -r '.path' "$logical_manifest")"
@@ -1103,7 +1162,7 @@ tc_sync_from_agents_global() {
     mk_central_skill "$H" "gamma"
     run add alpha -a cursor -g
     # 手工放一个实体副本（非符号链接）模拟 copy 安装，触发扫描的 copy 分支
-    cp -r "$H/agent-settings/skills/gamma" "$H/.codex/skills/gamma"
+    cp -r "$H/agent-settings/skills/gamma" "$H/.agents/skills/gamma"
     rm -f "$yaml"                              # 抹掉配置，仅留链接/副本
 
     run sync --from-agents -g
@@ -1270,9 +1329,9 @@ tc_sync_from_agents_project_migration() {
 
     # -p 模式：再混入一个实体副本，覆盖项目侧扫描的 copy 分支
     mk_central_skill "$H" "gamma"
-    local pp="$H/projp"; mkdir -p "$pp/.cursor/skills" "$pp/.codex/skills"
+    local pp="$H/projp"; mkdir -p "$pp/.cursor/skills" "$pp/.agents/skills"
     ln -s "$H/agent-settings/skills/alpha" "$pp/.cursor/skills/alpha"
-    cp -r "$H/agent-settings/skills/gamma" "$pp/.codex/skills/gamma"
+    cp -r "$H/agent-settings/skills/gamma" "$pp/.agents/skills/gamma"
     local mp; mp=$(expected_manifest "$H" "$pp")
     run sync --from-agents -p "$pp"
     assert_present "-p 扫描生成清单" "$mp"
@@ -1444,7 +1503,7 @@ tc_remove_global_partial() {
     runc remove alpha/ -a codex -g
     assert_rc_nonzero "尾斜杠全局 codex remove 不命中精确 skill 名称 → 报错"
     assert_contains "尾斜杠全局 codex remove 提示未找到" "$OUT" "未找到 Skill"
-    assert_real_dir "尾斜杠全局 codex remove 未删 copy" "$H/.codex/skills/alpha"
+    assert_real_dir "尾斜杠全局 codex remove 未删 copy" "$H/.agents/skills/alpha"
     assert_eq "尾斜杠全局 codex remove 未改 yaml" "codex" \
         "$(yq -r '.skills.alpha.agents_copy[]' "$yaml")"
 
@@ -1457,7 +1516,7 @@ tc_remove_global_partial() {
     yq -i '.skills.alpha.updated_at = "2000-01-01T00:00:00+08:00"' "$yaml"
     runc remove alpha -a codex -g        # 删 copy 目录，需确认
     assert_rc "全局 codex remove 退出码 0" 0
-    assert_absent "全局 codex copy 已删" "$H/.codex/skills/alpha"
+    assert_absent "全局 codex copy 已删" "$H/.agents/skills/alpha"
     assert_ne "全局 codex remove 刷新 updated_at" "2000-01-01T00:00:00+08:00" \
         "$(yq -r '.skills.alpha.updated_at' "$yaml")"
     assert_skill_record_empty_agents "yaml" "$yaml" "alpha"
@@ -1476,7 +1535,7 @@ tc_remove_global_partial() {
 }
 
 tc_remove_complete() {
-    note "remove（完全移除）：中央目录 + 全局安装 + yaml 记录"
+    note "remove（完全移除）：中央目录 + 受管理的全局安装 + yaml 记录"
     H=$(new_home); seed_agent_dirs "$H"
     local yaml="$H/agent-settings/skills/skills.yaml"
     mk_central_skill "$H" "alpha"
@@ -1730,7 +1789,7 @@ tc_project_orphan_fix() {
     run add mentor -s -p "$proj"                     # 登记 subagent
     # 制造游离条目（指向中央目录、但清单未登记）：游离 link skill / 游离 copy skill / 游离 subagent
     ln -s "$H/agent-settings/skills/orphan-skill" "$proj/.claude/skills/orphan-skill"
-    cp -r "$H/agent-settings/skills/orphan-copy" "$proj/.codex/skills/orphan-copy"
+    cp -r "$H/agent-settings/skills/orphan-copy" "$proj/.agents/skills/orphan-copy"
     ln -s "$H/agent-settings/agents/stray.md" "$proj/.claude/agents/stray.md"
 
     run status -p "$proj"
@@ -1741,7 +1800,7 @@ tc_project_orphan_fix() {
     run status --fix -p "$proj"
     assert_contains "提示删除游离链接" "$OUT" "已删除游离链接"
     assert_absent "游离 skill 链接已删" "$proj/.claude/skills/orphan-skill"
-    assert_absent "游离 copy skill 已删" "$proj/.codex/skills/orphan-copy"
+    assert_absent "游离 copy skill 已删" "$proj/.agents/skills/orphan-copy"
     assert_absent "游离 subagent 链接已删" "$proj/.claude/agents/stray.md"
     assert_symlink "已登记 alpha 链接保留" "$proj/.claude/skills/alpha"
     assert_symlink "已登记 mentor 链接保留" "$proj/.claude/agents/mentor.md"
@@ -1786,6 +1845,7 @@ tc_add_global_source_quotes_strenv
 tc_add_local_overwrite
 tc_link_to_copy_migration_and_field_order
 tc_add_copy_global
+tc_codex_legacy_path_ignored
 tc_opencode_paths_status_and_remove
 tc_pi_paths_status_and_remove
 tc_omp_paths_status_and_remove

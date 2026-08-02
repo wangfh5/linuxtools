@@ -65,7 +65,7 @@ scope 决定操作落在哪里、状态记到哪个文件：
 |-------|------|------|
 | cursor | `~/.cursor/skills/` | `<project>/.cursor/skills/` |
 | claude-code | `~/.claude/skills/` | `<project>/.claude/skills/` |
-| codex | `~/.codex/skills/` | `<project>/.codex/skills/` |
+| codex | `~/.agents/skills/` | `<project>/.agents/skills/` |
 | gemini | `~/.gemini/skills/` | `<project>/.gemini/skills/` |
 | opencode | `~/.config/opencode/skills/` | `<project>/.opencode/skills/` |
 | pi | `~/.pi/agent/skills/` | `<project>/.pi/skills/` |
@@ -73,13 +73,15 @@ scope 决定操作落在哪里、状态记到哪个文件：
 
 subagent（`-s`）固定走 claude-code，链接到 `.claude/agents/`（全局为 `~/.claude/agents/`）。
 
+asmgr 仅管理表中列出的目标目录；其他路径下的条目不会被扫描、同步、修复或删除。
+
 ### 链接 vs 复制
 
 默认创建符号链接；`-c` 改为复制整个目录，用于不支持符号链接的 agent。
 
 ```bash
 asmgr add ./my-skill -a cursor -g        # 符号链接：~/.cursor/skills/my-skill -> 中央目录
-asmgr add ./my-skill -a codex  -g -c     # 复制：~/.codex/skills/my-skill（实体目录）
+asmgr add ./my-skill -a codex  -g -c     # 复制：~/.agents/skills/my-skill（实体目录）
 ```
 
 复制模式占更多磁盘，且更新中央目录后需重新安装才能同步；符号链接模式则自动同步。删除复制目录时会要求确认。
@@ -248,7 +250,7 @@ asmgr sync --from-config [-g | --all]
 
 ### remove — 移除
 
-**完全移除**（删除中央目录 + 所有全局安装 + `skills.yaml` 整块记录，执行前确认）：
+**完全移除**（删除中央目录 + 所有受管理的全局安装 + `skills.yaml` 整块记录，执行前确认）：
 
 ```bash
 asmgr remove skill-creator
