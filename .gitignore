@@ -1,5 +1,6 @@
 /resources/
 /.cursor/
 /docs/superpowers/
+/asmgr/config.sh
 
 .DS_Store

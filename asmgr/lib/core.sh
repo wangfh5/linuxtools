@@ -57,14 +57,11 @@ check_dependencies() {
     return 0
 }
 
-# 中央 skills 存储目录
-SKILLS_DIR="$HOME/agent-settings/skills"
-
-# Skills 配置文件
+# ASMGR_HOME 可在 asmgr/config.sh 中配置。
+ASMGR_HOME="${ASMGR_HOME:-$HOME/agent-settings}"
+AGENT_SETTINGS_ROOT="$ASMGR_HOME"
+SKILLS_DIR="$AGENT_SETTINGS_ROOT/skills"
 SKILLS_YAML="$SKILLS_DIR/skills.yaml"
-
-# agent-settings 根目录（中央 skills 目录的父目录），用于现场推导中央路径
-AGENT_SETTINGS_ROOT="$(dirname "$SKILLS_DIR")"
 # 中央 subagents 存储目录
 AGENTS_DIR="$AGENT_SETTINGS_ROOT/agents"
 # 项目级清单目录（每项目一个 <name>.yaml）

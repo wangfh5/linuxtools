@@ -7,9 +7,9 @@
 #
 # 设计要点：
 #   - 完全沙箱化：每个用例用独立的临时 HOME。asmgr.sh 的所有中央路径
-#     （$HOME/agent-settings/skills|agents|projects、各 agent 的 ~/.{cursor,claude,gemini}、~/.agents
+#     （$ASMGR_HOME/skills|agents|projects，未设置时默认为 $HOME/agent-settings；各 agent 的 ~/.{cursor,claude,gemini}、~/.agents
 #      与 ~/.config/opencode、~/.pi/agent、~/.omp/agent）
-#     都从 $HOME 现场派生，所以换 HOME 就把整套工具重定向到沙箱，绝不碰真实 ~/agent-settings。
+#     默认用例都从 $HOME 现场派生，所以换 HOME 就把整套工具重定向到沙箱，绝不碰真实 ~/agent-settings。
 #   - 自清理：单一 trap 删除根临时目录。
 #   - 结构化：每个能力一个 tc_* 用例函数；统一的 pass/fail/skip 计数；
 #     失败打印断言信息 + 相关命令输出；结尾汇总，有失败则 exit 1。
@@ -148,15 +148,15 @@ mk_central_sub_md() {    # 文件型 subagent: agents/<name>.md
     printf -- '---\nname: %s\n---\n' "$name" > "$home/agent-settings/agents/$name.md"
 }
 
-run()    { OUT=$(HOME="$H" "$SM" "$@" 2>&1); RC=$?; }
-runc()   { OUT=$(printf 'y\n' | HOME="$H" "$SM" "$@" 2>&1); RC=$?; }
-run_input() { local input="$1"; shift; OUT=$(printf '%s' "$input" | HOME="$H" "$SM" "$@" 2>&1); RC=$?; }
-run_in() { local d="$1"; shift; OUT=$(cd "$d" && HOME="$H" "$SM" "$@" 2>&1); RC=$?; }
-runc_in(){ local d="$1"; shift; OUT=$(cd "$d" && printf 'y\n' | HOME="$H" "$SM" "$@" 2>&1); RC=$?; }
+run()    { OUT=$(HOME="$H" ASMGR_HOME="$H/agent-settings" "$SM" "$@" 2>&1); RC=$?; }
+runc()   { OUT=$(printf 'y\n' | HOME="$H" ASMGR_HOME="$H/agent-settings" "$SM" "$@" 2>&1); RC=$?; }
+run_input() { local input="$1"; shift; OUT=$(printf '%s' "$input" | HOME="$H" ASMGR_HOME="$H/agent-settings" "$SM" "$@" 2>&1); RC=$?; }
+run_in() { local d="$1"; shift; OUT=$(cd "$d" && HOME="$H" ASMGR_HOME="$H/agent-settings" "$SM" "$@" 2>&1); RC=$?; }
+runc_in(){ local d="$1"; shift; OUT=$(cd "$d" && printf 'y\n' | HOME="$H" ASMGR_HOME="$H/agent-settings" "$SM" "$@" 2>&1); RC=$?; }
 # 把一个 fake CLI 目录放到 PATH 最前再调用。注意 asmgr 启动会把标准目录再前置到 $PATH 之前，
 # 所以 fake 命中的前提是“标准目录里没有真实 claude”——由 claude_winnable() 守卫，相关用例并额外
 # 断言 stub 日志被写入，确保确实命中而非偶然。yq/jq/git 仍从原 PATH 解析。
-run_fake() { local fb="$1"; shift; OUT=$(PATH="$fb:$PATH" HOME="$H" "$SM" "$@" 2>&1); RC=$?; }
+run_fake() { local fb="$1"; shift; OUT=$(PATH="$fb:$PATH" HOME="$H" ASMGR_HOME="$H/agent-settings" "$SM" "$@" 2>&1); RC=$?; }
 
 # fake claude 能否保证命中：asmgr 会把这些标准目录前置；只有它们都没有真实 claude，
 # 放在其后的 fake 才稳赢。否则诚实 SKIP（而非冒充 hermetic）。
@@ -228,7 +228,7 @@ tc_help_and_deps() {
     # 只有当 yq/jq 不在那些目录里（本机在 ~/bin）才能真正模拟缺失——否则诚实 SKIP，避免跨机假结果。
     if deps_hideable; then
         mkdir -p "$TMP_ROOT/emptybin"
-        OUT=$(PATH="$TMP_ROOT/emptybin" HOME="$H" "$SM" list 2>&1); RC=$?
+        OUT=$(PATH="$TMP_ROOT/emptybin" HOME="$H" ASMGR_HOME="$H/agent-settings" "$SM" list 2>&1); RC=$?
         assert_rc_nonzero "缺依赖时退出非零"
         assert_contains "缺依赖时给出提示" "$OUT" "缺少必需的依赖工具"
     else
@@ -1819,7 +1819,7 @@ tc_status_all_exit_folds_global() {
 
     # --- 干净环境下 status --all 应返回 0 ---
     local H2; H2=$(new_home); seed_agent_dirs "$H2"
-    OUT=$(HOME="$H2" "$SM" status --all 2>/dev/null); RC=$?
+    OUT=$(HOME="$H2" ASMGR_HOME="$H2/agent-settings" "$SM" status --all 2>/dev/null); RC=$?
     assert_rc "干净环境 status --all → 0" 0
 }
 
@@ -1833,8 +1833,27 @@ tc_sync_all_exit_folds_global() {
     assert_contains "仍打印配置缺失" "$OUT" "配置文件不存在"
 }
 
+tc_asmgr_home_override() {
+    note "路径配置：ASMGR_HOME 覆盖中央目录"
+    H=$(new_home); seed_agent_dirs "$H"
+    local custom_root="$H/Sync/infra/agent-settings"
+    local source_dir
+    source_dir=$(mk_src_skill "$H/sources" "portable")
+
+    OUT=$(HOME="$H" ASMGR_HOME="$custom_root" "$SM" add "$source_dir" -a cursor -g 2>&1); RC=$?
+    assert_rc "自定义中央目录 add 成功" 0
+    assert_present "skill 写入 ASMGR_HOME" "$custom_root/skills/portable/SKILL.md"
+    assert_present "registry 写入 ASMGR_HOME" "$custom_root/skills/skills.yaml"
+    assert_symlink "agent 链接已创建" "$H/.cursor/skills/portable"
+    assert_eq "agent 链接指向自定义中央目录" \
+        "$custom_root/skills/portable" "$(readlink "$H/.cursor/skills/portable")"
+    assert_absent "默认中央目录未被误写" "$H/agent-settings/skills/portable"
+
+}
+
 # ════════════════════════════ 运行 ════════════════════════════
 tc_help_and_deps
+tc_asmgr_home_override
 tc_add_global_link_and_record
 tc_add_source_only_registry_record
 tc_add_project_source_records_global_source

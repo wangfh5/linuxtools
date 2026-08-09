@@ -1,0 +1,2 @@
+# 复制为 config.sh，然后修改中央 agent-settings 目录。
+ASMGR_HOME="$HOME/agent-settings"

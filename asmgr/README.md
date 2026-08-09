@@ -1,10 +1,10 @@
 # asmgr
 
-**asmgr (agent-setting manager)** — `~/agent-settings` 中央配置仓库的命令行管家：统一管理 skills、subagents、
+**asmgr (agent-setting manager)** — agent-settings 中央配置仓库的命令行管家：统一管理 skills、subagents、
 项目局域清单与 Claude Code plugin/marketplace，横跨 cursor / claude-code / codex / gemini / opencode / pi / omp，一套 scope 模型
 （默认当前目录 / `-g` 全局 / `-p` 项目 / `--all`）。
 
-核心思路：所有 skill 实体只存一份在中央目录 `~/agent-settings/skills/`，各 agent 目录通过**符号链接**
+核心思路：所有 skill 实体只存一份在中央目录 `$ASMGR_HOME/skills/`，各 agent 目录通过**符号链接**
 （或在不支持链接时**复制**）指过去；安装状态声明式记录在 yaml 里，换机器一键恢复。
 
 ## 安装
@@ -18,6 +18,10 @@ ln -sf $(pwd)/asmgr/asmgr.sh ~/bin/asmgr
 
 # 确保 ~/bin 在 PATH 中
 echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
+
+# 可选：中央仓库不在默认的 ~/agent-settings 时
+cp asmgr/config.sh.example asmgr/config.sh
+# 然后编辑 asmgr/config.sh 中的 ASMGR_HOME
 source ~/.zshrc
 
 # 必须安装 yq 和 jq（asmgr 启动时强制检查，缺任一则拒绝运行）
@@ -28,10 +32,17 @@ brew install yq jq
 
 ### 中央存储目录
 
-所有受管实体集中存放在 `~/agent-settings/`，随该仓库一起 git 同步：
+`ASMGR_HOME` 默认为 `~/agent-settings`。如果仓库在其他位置，在软件目录的 `config.sh` 中修改：
+
+```bash
+ASMGR_HOME="$HOME/Sync/infra/agent-settings"
+```
+
+`config.sh` 是本机配置，已被 Git 忽略。
+所有受管实体集中存放在该目录，可随仓库一起 git 同步：
 
 ```
-~/agent-settings/
+$ASMGR_HOME/
 ├── skills/                 # 所有 skill 实体（单一真相来源）
 │   ├── skills.yaml         #   全局安装注册表
 │   ├── skill-creator/
@@ -48,9 +59,9 @@ scope 决定操作落在哪里、状态记到哪个文件：
 
 | scope | flag | 操作目标 | 记录到 |
 |-------|------|----------|--------|
-| 当前目录项目 | 默认（无 flag） | agent 对应项目 skills 目录（见下表） | `~/agent-settings/projects/<name>.yaml` |
-| 全局 | `-g` | agent 对应全局 skills 目录（见下表） | `~/agent-settings/skills/skills.yaml` |
-| 指定项目 | `-p <dir>` | agent 对应项目 skills 目录（见下表） | `~/agent-settings/projects/<name>.yaml` |
+| 当前目录项目 | 默认（无 flag） | agent 对应项目 skills 目录（见下表） | `$ASMGR_HOME/projects/<name>.yaml` |
+| 全局 | `-g` | agent 对应全局 skills 目录（见下表） | `$ASMGR_HOME/skills/skills.yaml` |
+| 指定项目 | `-p <dir>` | agent 对应项目 skills 目录（见下表） | `$ASMGR_HOME/projects/<name>.yaml` |
 | 全部 | `--all` | 全局 + 所有已登记项目 | 二者 |
 
 `--all` 仅 `list` / `status` / `sync --from-config` 支持。
@@ -107,7 +118,7 @@ asmgr add ./my-skill -a codex  -g -c     # 复制：~/.agents/skills/my-skill（
 asmgr add [source] [-a <agents...>] [-g|-p <dir>] [-c]
 ```
 
-不传 `source` 时，`asmgr add` 会从中央目录 `~/agent-settings/skills/` 进入交互式选择器，逐步选择 skills、agents、scope、link/copy。若本机有 `fzf` 且在 TTY 中运行，会使用多选界面；否则自动退化为纯 Bash 编号输入。
+不传 `source` 时，`asmgr add` 会从中央目录 `$ASMGR_HOME/skills/` 进入交互式选择器，逐步选择 skills、agents、scope、link/copy。若本机有 `fzf` 且在 TTY 中运行，会使用多选界面；否则自动退化为纯 Bash 编号输入。
 
 ```bash
 asmgr add                              # 逐步选择 skills / agents / scope / link-copy
@@ -147,7 +158,7 @@ asmgr add https://github.com/anthropics/skills/tree/main/skills/skill-creator -a
 ### 项目局域 skill / subagent 工作流
 
 把某些 skill/subagent 绑定到具体项目，而不是装到全局。登记信息写进
-`~/agent-settings/projects/<name>.yaml`（文件名由项目路径派生，随 agent-settings git 同步），
+`$ASMGR_HOME/projects/<name>.yaml`（文件名由项目路径派生，随 agent-settings git 同步），
 换机器后一键恢复。
 
 ```bash
@@ -230,7 +241,7 @@ asmgr status -g       # 检查全局
 - **WRONG**: 安装方式不符或链接目标错误
 - **STALE**: `skills.yaml` 有记录、中央目录不存在（仅全局）
 
-全局 `status -g` 还会把中央 `~/agent-settings/skills/` 的直接子目录当作 registry 真相；`--fix` 会补齐缺失记录，并在可安全清理已声明安装后删除 stale 记录。
+全局 `status -g` 还会把中央 `$ASMGR_HOME/skills/` 的直接子目录当作 registry 真相；`--fix` 会补齐缺失记录，并在可安全清理已声明安装后删除 stale 记录。
 
 ### sync — 双向同步
 
@@ -303,7 +314,7 @@ asmgr sync --from-config -g       # 或 --all
 
 ### skills.yaml（全局注册表）
 
-位于 `~/agent-settings/skills/skills.yaml`，记录全局安装：
+位于 `$ASMGR_HOME/skills/skills.yaml`，记录全局安装：
 
 ```yaml
 skills:
@@ -394,7 +405,7 @@ subagents:
 | `lib/sources.sh` | skill 来源获取（GitHub 下载 / 本地复制 / 中央搜索）并安装到 agent 目录 |
 | `lib/plugin.sh` | Claude Code plugin/marketplace 与 `skills.yaml` 的 `claude_code` 段互转（仅全局 scope 触发） |
 
-**core.sh 的共享常量**：`SKILLS_DIR`（`~/agent-settings/skills`）、`SKILLS_YAML`、`AGENTS_DIR`（中央 subagents）、
+**core.sh 的共享常量**：`ASMGR_HOME`（默认 `~/agent-settings`）、`SKILLS_DIR`、`SKILLS_YAML`、`AGENTS_DIR`（中央 subagents）、
 `PROJECTS_DIR`（项目清单目录）、`SUPPORTED_AGENTS`（`cursor claude-code codex gemini opencode pi omp`）。
 （`CLAUDE_PLUGINS_DIR` 属 plugin 相关，定义在 `lib/plugin.sh`。）
 

@@ -20,6 +20,11 @@ done
 SCRIPT_DIR=$(cd "$(dirname "$_script")" && pwd)
 unset _script _dir
 
+# 本机配置（可选）。config.sh 不纳入版本控制。
+if [[ -z "${ASMGR_HOME:-}" && -f "$SCRIPT_DIR/config.sh" ]]; then
+    source "$SCRIPT_DIR/config.sh" || exit 1
+fi
+
 source "$SCRIPT_DIR/lib/core.sh" || { echo "error: failed to load lib/core.sh" >&2; exit 1; }
 source "$SCRIPT_DIR/lib/interactive.sh" || { echo "error: failed to load lib/interactive.sh" >&2; exit 1; }
 source "$SCRIPT_DIR/lib/materialize.sh" || { echo "error: failed to load lib/materialize.sh" >&2; exit 1; }
@@ -36,6 +41,9 @@ asmgr (agent-setting manager) — agent-settings 中央配置仓库的命令行�
 
 用法:
     asmgr <command> [options]
+
+配置:
+    $SCRIPT_DIR/config.sh    本机配置（可选）
 
 scope 约定（所有命令通用，决定操作落在哪里）:
     默认（无 flag）  当前目录项目（读写 ./.<agent>/ 与对应项目清单）
