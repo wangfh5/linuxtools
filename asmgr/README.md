@@ -108,7 +108,7 @@ asmgr add ./my-skill -a codex  -g -c     # 复制：~/.agents/skills/my-skill（
 | `asmgr sync --from-config [-g\|-p <dir>\|--all]` | 从配置正向重建链接（新机器部署）；全局 scope 下 config 即真相，删除未声明的游离链接 |
 | `asmgr remove <skill> [-a <agents>] [-s] [-g\|-p <dir>]` | 移除 skill/subagent（完全移除或从指定 scope 移除） |
 
-完整参数与示例见 `asmgr --help`。
+完整参数与示例见 `asmgr --help`（总览）与 `asmgr help <command>` / `asmgr <command> --help`（单命令详情）。
 
 ## 使用方法
 

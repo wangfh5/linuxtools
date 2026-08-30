@@ -33,7 +33,7 @@ source "$SCRIPT_DIR/lib/plugin.sh" || { echo "error: failed to load lib/plugin.s
 source "$SCRIPT_DIR/lib/sources.sh" || { echo "error: failed to load lib/sources.sh" >&2; exit 1; }
 source "$SCRIPT_DIR/lib/project.sh" || { echo "error: failed to load lib/project.sh" >&2; exit 1; }
 
-# 显示帮助信息
+# 显示顶层帮助（精简总览 + 关键行为前置；单命令详情见 show_help_<cmd>）
 show_help() {
     cat << EOF
 asmgr (agent-setting manager) — agent-settings 中央配置仓库的命令行管家
@@ -41,128 +41,214 @@ asmgr (agent-setting manager) — agent-settings 中央配置仓库的命令行�
 
 用法:
     asmgr <command> [options]
+    asmgr help <command>    查看单个命令的详细帮助（如: asmgr help add）
 
-配置:
-    $SCRIPT_DIR/config.sh    本机配置（可选）
+scope 约定（所有命令通用。默认 = 当前目录项目，-g 才是全局）:
+    默认（无 flag）  当前目录项目: 读写 ./.<agent>/，登记写进项目清单
+    -g, --global    全局: 家目录 ~/.<agent>/，登记写进 skills.yaml
+    -p <dir>        指定项目根目录
+    --all           全局 + 所有已登记项目（仅 list / status / sync --from-config 支持）
 
-scope 约定（所有命令通用，决定操作落在哪里）:
-    默认（无 flag）  当前目录项目（读写 ./.<agent>/ 与对应项目清单）
-    -g, --global    全局（家目录 ~/.<agent>/）
-    -p <dir>        指定项目目录
-    --all           全局 + 所有已登记项目（仅 list / status / sync --from-config）
+命令:
+    add      添加 skill/subagent 并链接到 agents（省略 source 进入交互选择器）
+    list     列出 skills / 项目清单及安装状态
+    status   检查配置与实际链接的一致性（--fix 自动修复）
+    sync     配置与实际安装双向同步（--from-agents 反向 / --from-config 正向）
+    remove   移除 skill/subagent
 
-命令（scope 默认均为「当前目录项目」，除非另行说明）:
-    add [source] [-a <agents...>] [-s] [-g|-p <dir>] [-c]  添加 skill/subagent 并链接到 agents；省略 source 进入选择器
-    list   [-g | -p <dir> | --all]                列出 skills/项目
-    status [--fix] [-g | -p <dir> | --all]        检查链接一致性（--fix 自动修复）
-    sync --from-agents [-g | -p <dir>]            从现有安装（link/copy）反向重建配置
-    sync --from-config [-g | -p <dir> | --all]    从配置正向重建链接（全局 scope 下 config 即真相：删除未声明的游离链接）
-    remove <skill> [-a <agents...>] [-s] [-g|-p <dir>]  从指定 scope 移除 skill/subagent
-    remove <skill>（不带 -a/-s/scope）             完全移除（中央目录 + 受管理的全局安装 + 配置）
+[!] 关键行为（最容易被误读，操作前务必确认）:
+    1. add <显式 source> 不带 -a  →  仅下载/复制到中央目录，不建任何链接
+    2. remove <skill> 不带 flag  →  完全移除: 中央目录 + 全局安装 + 配置记录
+    3. status --fix 的游离处置随 scope 相反  →  全局: 登记进配置; 项目: 直接删除链接
+    4. sync --from-config -g/--all 以配置为真相  →  删除 yaml 未声明的全局游离链接
+    5. 中央 skills/ 的增删一律走 asmgr，请勿手工 cp/rm
 
-项目局域清单:
-    集中存放在 $PROJECTS_DIR/<name>.yaml（文件名由 \$HOME 相对路径派生，/ → __），
-    随 agent-settings 一起 git 同步。换新机器一键恢复: asmgr sync --from-config --all
+路径（中央仓库根 = agent-settings，可在 config.sh 用 ASMGR_HOME 改）:
+    skills/        中央 skill 实体 + skills.yaml（全局注册表）
+    agents/        中央 subagent 实体
+    projects/      项目清单（每项目一个 <name>.yaml）
+EOF
+}
 
-Claude Code plugin / marketplace（仅对 claude-code 生效，依赖 claude CLI）:
-    plugin / marketplace 本身请通过官方 claude plugin CLI 安装/卸载（见官方文档）。
-    asmgr 不包装安装/卸载，仅在【全局 scope 的 sync】里随带读写 skills.yaml 的 claude_code 段：
-      sync --from-agents -g          把 claude 当前 marketplace+plugin 状态合并写入 yaml
-      sync --from-config -g / --all  把 yaml 中声明的 marketplace+plugin 部署到本机 claude
-    （当前目录 / -p 项目级 sync 只处理 skills，不涉及 plugin/marketplace。）
+# add — 详细帮助
+show_help_add() {
+    cat << EOF
+asmgr add — 添加 skill/subagent 到中央目录并链接到 agents
 
-add 命令参数:
-    source              可省略；省略时从中央目录进入交互式选择器。显式传入时支持三种格式:
-                        - GitHub URL: https://github.com/owner/repo
-                                      https://github.com/owner/repo/tree/branch
-                                      https://github.com/owner/repo/tree/branch/path/to/skill
-                        - 本地路径: /path/to/skill 或 ./skill 或 ../skill
-                          (必须以 /, ./, ../ 开头，显式指定路径)
-                        - Skill 名称: skill-creator (搜索中央目录)
+用法:
+    asmgr add [source] [-a <agents...>] [-s] [-g|-p <dir>] [-c]
 
-    -a <agents...>      指定要链接的 agents，支持: cursor, claude-code, codex, gemini, opencode, pi, omp
-                        可指定多个，用空格分隔；交互模式下不指定则进入 agents 选择器；显式 source 模式下不指定则仅下载到中央目录
+scope（决定链接落点与登记文件）:
+    默认（无 flag）  当前目录项目: 链接建在 ./.<agent>/，登记写进项目清单
+    -g, --global    全局: 链接建在 ~/.<agent>/，登记写进 skills.yaml
+    -p <dir>        指定项目根目录（不能与 -g 同用）
 
-    -g, --global        全局安装（家目录）
-                        创建 ~/.cursor/skills/, ~/.claude/skills/, ~/.agents/skills/, ~/.gemini/skills/,
-                             ~/.config/opencode/skills/, ~/.pi/agent/skills/, ~/.omp/agent/skills/
+source（可省略）:
+    省略          从中央目录进入交互式选择器（skills → agents → scope → link/copy；
+                  有 fzf 且在 TTY 时多选，否则退化为编号输入）
+    GitHub URL    https://github.com/owner/repo
+                  https://github.com/owner/repo/tree/branch
+                  https://github.com/owner/repo/tree/branch/path/to/skill
+    本地路径      /path/to/skill 或 ./skill 或 ../skill（必须以 / ./ ../ 开头，显式指定）
+    Skill 名称    在中央目录搜索（支持模糊；多个命中时交互选择）
 
-    -p, --project <dir> 指定项目根目录（局域安装），默认为当前目录；不能与 -g 同用
-                        创建 <dir>/.cursor/skills/, <dir>/.claude/skills/, <dir>/.agents/skills/,
-                             <dir>/.gemini/skills/, <dir>/.opencode/skills/, <dir>/.pi/skills/, <dir>/.omp/skills/
+参数:
+    -a <agents...>    指定要链接的 agents，空格分隔多个:
+                      cursor claude-code codex gemini opencode pi omp
+                      交互模式下省略则进入 agents 选择器
+    -c, --copy        复制整个目录而非符号链接（默认 symlink；交互模式下跳过 link/copy 选择）
+    -s, --subagent    链接中央 agents/ 下【已存在】的 subagent（目录或 .md，按名称，不下载）到
+                      .claude/agents；固定 claude-code、忽略 -a、不支持 -c；
+                      项目 scope 写入清单 subagents 段；-g 不写配置记录（每机一次的本地动作）
 
-    -c, --copy          复制模式（复制整个目录而非符号链接），适用于不支持符号链接的 agent
-                        默认为符号链接模式；交互模式下指定 -c 会跳过 link/copy 选择
+[!] 关键行为: 显式传入 source（GitHub URL / 本地路径）且不带 -a 时，仅把 skill 落入
+    中央目录（并在 skills.yaml 登记 source），不创建任何链接、不装进任何 agent；
+    按名称搜索（条目已在中央目录）时不带 -a 则无任何实际操作。两者均不报错。
+    要安装必须显式 -a，或省略 source 走交互选择器。
+    中央 skills/ 的增删一律走 asmgr（add/remove），请勿手工 cp/rm。
 
-    -s, --subagent      把中央 agents/ 下的 subagent（目录或 .md）链接到 .claude/agents
-                        固定 claude-code、忽略 -a；项目/局域 scope 会写入清单 subagents 段
-
-    注意: 默认是当前目录项目安装并写入项目清单；用 -g 才是全局安装
-
-remove 命令参数:
-    <skill>             Skill remove 按已存在的 skill/install 名称精确匹配，不接收路径
-    -a <agents...>      指定要移除的 agents
-    -s, --subagent      移除 subagent（从 .claude/agents 解链 + 更新清单）
-    -g, --global        从全局安装移除
-    -p, --project <dir> 从指定项目移除
-                        不带 -a/-s/-g/-p 时 → 完全移除（中央目录 + 受管理的全局安装 + 配置）
+链接目标目录（<base> = 项目目录或 \$HOME）:
+    cursor       <base>/.cursor/skills
+    claude-code  <base>/.claude/skills
+    codex        <base>/.agents/skills
+    gemini       <base>/.gemini/skills
+    opencode     <base>/.opencode/skills（全局: ~/.config/opencode/skills）
+    pi           <base>/.pi/skills（全局: ~/.pi/agent/skills）
+    omp          <base>/.omp/skills（全局: ~/.omp/agent/skills）
 
 示例:
-    # ---- add：scope 由 flag 决定 ----
-    # 交互选择中央 skills、agents、scope、link/copy（无 fzf 时自动退化为编号输入）
-    asmgr add
-    # 已指定 agents/scope/method 时只选择 skills
-    asmgr add -a claude-code opencode -g -c
-    # 当前目录项目（默认）：创建 ./.cursor/skills/my-skill
-    asmgr add ./my-skill -a cursor
-    # 全局（-g）：创建 ~/.cursor/skills/my-skill
-    asmgr add ./my-skill -a cursor -g
-    # 指定项目（-p）：创建 ~/projects/foo/.cursor/skills/my-skill
-    asmgr add ./my-skill -a cursor -p ~/projects/foo
-    # 复制模式（-c，适用于不支持符号链接的 agent），可与 symlink 混用
-    asmgr add ./my-skill -a cursor -g        # symlink
-    asmgr add ./my-skill -a codex  -g -c     # copy
-    # 多 agents / 从 GitHub 添加
-    asmgr add skill-creator -a cursor claude-code -g
-    asmgr add https://github.com/coleam00/excalidraw-diagram-skill -a cursor -g
+    asmgr add                                  # 交互选择 skills / agents / scope / link-copy
+    asmgr add ./my-skill -a cursor             # 当前目录项目: ./.cursor/skills/my-skill
+    asmgr add ./my-skill -a cursor -g          # 全局: ~/.cursor/skills/my-skill
+    asmgr add ./my-skill -a cursor -p ~/p/foo  # 指定项目
+    asmgr add skill-creator -a cursor claude-code -g   # 按名称从中央目录链接
     asmgr add https://github.com/anthropics/skills/tree/main/skills/skill-creator -a cursor
-
-    # ---- 全局 skills 的查看 / 检查 / 同步（注意都要 -g）----
-    asmgr list -g                  # 列出全局安装的 skills
-    asmgr status -g                # 检查全局链接一致性
-    asmgr status -g --fix          # 并自动修复
-    asmgr sync --from-agents -g    # 首次/迁移：从全局现有安装反向生成 skills.yaml（含 plugin）
-    asmgr sync --from-config -g    # 仅按 skills.yaml 重建全局链接（含 plugin）
-
-    # ---- 项目局域 skill/subagent 工作流（默认 = 当前目录项目）----
-    cd ~/Projects/foo
-    asmgr add paper-writing-mentor -a claude-code codex   # 登记 skill，写入项目清单
-    asmgr add paper-writing-mentor -s                     # 登记 subagent → .claude/agents
-    asmgr sync --from-agents                              # 扫当前目录现有链接，生成项目清单
-    asmgr list                                            # 查看当前项目清单
-    asmgr status --fix                                    # 检查并修复当前项目
-    asmgr remove paper-writing-mentor -a claude-code codex
-    asmgr remove paper-writing-mentor -s
-
-    # ---- 跨机恢复 / 完全移除 ----
-    asmgr sync --from-config --all     # git pull agent-settings 后，一键恢复全局 + 所有项目
-    asmgr remove skill-creator         # 完全移除（中央目录 + 受管理的全局安装 + 配置）
-    asmgr remove skill-creator -a cursor -g            # 仅从全局 cursor 移除
-    asmgr remove skill-creator -a cursor -p ~/projects/foo  # 仅从指定项目移除
-
-    # ---- Claude Code plugin 工作流 ----
-    #   1) 用官方 CLI 安装 marketplace 和 plugin：
-    #        claude plugin marketplace add openai/codex-plugin-cc
-    #        claude plugin install codex@openai-codex
-    #   2) 写入 yaml 以便跨机同步（全局 scope 才会带上 plugin）：
-    #        asmgr sync --from-agents -g
-    #   3) 新机器 clone agent-settings 后：
-    #        asmgr sync --from-config -g      # 或 --all
-
-中央存储目录: $SKILLS_DIR
-配置文件: $SKILLS_YAML
-Claude Code plugins: $CLAUDE_PLUGINS_DIR
+    asmgr add ./my-skill                       # 仅复制进中央目录，不建任何链接（见上关键行为）
+    asmgr add some-subagent -s                 # 链接 subagent 到 ./.claude/agents
 EOF
+}
+
+# list — 详细帮助
+show_help_list() {
+    cat << EOF
+asmgr list — 列出 skills / 项目清单及安装状态
+
+用法:
+    asmgr list [-g | -p <dir> | --all]
+
+scope:
+    默认（无 flag）  当前目录项目: 显示其清单内容（无清单则提示）
+    -g, --global    全局: skills.yaml 中每个 skill 的来源与各 agent 的 link/copy 实况
+    -p <dir>        指定项目的清单
+    --all           全局 + 所有已登记项目
+EOF
+}
+
+# status — 详细帮助
+show_help_status() {
+    cat << EOF
+asmgr status — 检查配置声明与实际安装（link/copy）的一致性
+
+用法:
+    asmgr status [--fix] [-g | -p <dir> | --all]
+
+scope:
+    默认（无 flag）  当前目录项目（按项目清单检查）
+    -g, --global    全局（按 skills.yaml 检查；并把中央目录直接子目录视作 registry 真相核对）
+    -p <dir>        指定项目
+    --all           全局 + 所有已登记项目
+
+检查结果标签:
+    [OK]      一致
+    [MISSING] 配置有、链接/副本不存在
+    [WRONG]   安装方式不符或链接目标错误
+    [ORPHAN]  实际存在指向中央目录的链接/副本、配置未声明（游离）
+    [STALE]   skills.yaml 有记录、中央目录已不存在（仅全局）
+发现问题即退出码非零（--fix 修复后亦然）。
+
+[!] --fix 副作用（两个 scope 语义相反）:
+    全局（-g / --all 的全局部分）:
+        游离安装 → 登记进 skills.yaml（采纳，不删除）；补齐/修复声明过的安装；
+        补登中央目录新增 skill；删除 stale 记录及其全局安装
+    项目（默认 / -p）:
+        修复/补齐声明过的安装；清单未声明的游离链接/副本 → 直接删除
+EOF
+}
+
+# sync — 详细帮助
+show_help_sync() {
+    cat << EOF
+asmgr sync — 配置与实际安装双向同步
+
+用法:
+    asmgr sync --from-agents | --from-config [-g | -p <dir> | --all]
+
+--from-agents  实态 → 配置（首次使用 / 迁移）:
+    -g              扫描全局各 agent 目录，重建 skills.yaml 的 agents_link/agents_copy
+                    （保留 source/updated_at）；有 claude CLI 时把 plugin/marketplace
+                    实况合并写入 yaml 的 claude_code 段
+    默认 / -p <dir> 扫描项目目录现有链接，生成/更新项目清单（含 subagents）
+    --all           不适用（无法枚举所有项目目录）
+
+--from-config  配置 → 实态（新机部署 / 重建链接）:
+    -g / --all      按 skills.yaml 重建全局链接/副本；yaml 有 claude_code 段时同时部署
+                    plugin/marketplace（需 claude CLI）
+                    [!] 以配置为真相: 会删除 yaml 未声明的全局游离符号链接
+                        （copy 游离不清理，仅 status 报告）
+    默认 / -p <dir> 按项目清单重建该项目的链接（含 subagents）；不清理游离
+
+跨机恢复: git pull agent-settings 后 → asmgr sync --from-config --all
+EOF
+}
+
+# remove — 详细帮助
+show_help_remove() {
+    cat << EOF
+asmgr remove — 移除 skill/subagent
+
+用法:
+    asmgr remove <skill>                                    # 完全移除（见下方 [!]）
+    asmgr remove <skill> -a <agents...> [-s] [-g|-p <dir>]  # 从指定 scope 移除
+
+部分移除参数（带 -a 或 -s 才是部分移除，中央目录保留）:
+    -a <agents...>    从这些 agent 移除（symlink 直接删；copy 目录删除前确认）
+    -g, --global      从全局安装移除（登记在 skills.yaml）
+    -p <dir>          从指定项目移除
+    （无 scope flag = 当前目录项目）
+    -s, --subagent    移除 subagent: 从 .claude/agents 解链并更新清单（固定 claude-code）
+    全局部分移除清空最后一个 agent 后，yaml 中保留该 skill 记录及 source（供重新安装）；
+    只有完全移除才删除记录
+
+[!] 完全移除（不带 -a/-s；注意仅带 -g 或 -p 也是完全移除）: 删除中央目录
+    $SKILLS_DIR/<skill> + 所有全局安装 + skills.yaml 记录（执行前有 y/N 确认；
+    项目安装不受影响）。局部移除必须显式给 -a（或 -s）。
+
+<skill> 按已存在的安装名称精确匹配，不接收路径。
+
+示例:
+    asmgr remove my-skill                        # 完全移除（中央目录 + 全局安装 + 配置）
+    asmgr remove my-skill -a cursor -g           # 仅从全局 cursor 移除
+    asmgr remove my-skill -a cursor              # 仅从当前目录项目移除
+    asmgr remove my-skill -a cursor -p ~/p/foo   # 仅从指定项目移除
+    asmgr remove my-subagent -s                  # 移除 subagent 链接
+EOF
+}
+
+# 分命令帮助路由: asmgr help <cmd> / asmgr <cmd> --help
+show_cmd_help() {
+    case "$1" in
+        add)    show_help_add ;;
+        list)   show_help_list ;;
+        status) show_help_status ;;
+        sync)   show_help_sync ;;
+        remove) show_help_remove ;;
+        *)
+            print_error "未知命令: $1"
+            echo "可用命令: add list status sync remove"
+            echo "总览: asmgr --help"
+            return 1
+            ;;
+    esac
 }
 
 # ---------------------------------------------------------------------------- #
@@ -284,13 +370,15 @@ cmd_add() {
                 fi
                 if [[ $# -gt 0 ]]; then
                     print_error "未知参数: $1"
-                    show_help
+                    echo "用法: asmgr add [source] [-a <agents...>] [-s] [-g|-p <dir>] [-c]"
+                    echo "详情: asmgr help add"
                     return 1
                 fi
                 ;;
             -*)
                 print_error "未知参数: $1"
-                show_help
+                echo "用法: asmgr add [source] [-a <agents...>] [-s] [-g|-p <dir>] [-c]"
+                echo "详情: asmgr help add"
                 return 1
                 ;;
             *)
@@ -299,7 +387,8 @@ cmd_add() {
                     shift
                 else
                     print_error "未知参数: $1"
-                    show_help
+                    echo "用法: asmgr add [source] [-a <agents...>] [-s] [-g|-p <dir>] [-c]"
+                    echo "详情: asmgr help add"
                     return 1
                 fi
                 ;;
@@ -1350,26 +1439,38 @@ main() {
 
     case "$command" in
         add)
+            [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && { show_help_add; return 0; }
             cmd_add "$@"
             ;;
         list)
+            [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && { show_help_list; return 0; }
             cmd_list "$@"
             ;;
         status)
+            [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && { show_help_status; return 0; }
             cmd_status "$@"
             ;;
         sync)
+            [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && { show_help_sync; return 0; }
             cmd_sync "$@"
             ;;
         remove)
+            [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && { show_help_remove; return 0; }
             cmd_remove "$@"
             ;;
-        help|--help|-h)
+        help)
+            if [[ $# -gt 0 ]]; then
+                show_cmd_help "$1"
+            else
+                show_help
+            fi
+            ;;
+        --help|-h)
             show_help
             ;;
         *)
             print_error "未知命令: $command"
-            show_help
+            echo "可用命令: add list status sync remove（详情: asmgr help <command>）"
             return 1
             ;;
     esac
