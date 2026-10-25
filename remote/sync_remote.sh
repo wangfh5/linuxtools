@@ -1315,12 +1315,14 @@ copy_dry_run_report() {
         exit 1
     fi
 
-    local line new=() changed=()
+    local line new=() changed=() other=()
     while IFS= read -r line; do
         case "$line" in
             # 推送到远端时为 "<f"（发送），拉取时为 ">f"（接收）
             [\<\>]f+++*) new+=("${line#* }") ;;
             [\<\>]f*)    changed+=("${line#* }") ;;
+            .d*|"")       ;;  # 仅目录属性变化，不列出
+            *)            other+=("$line") ;;  # 符号链接、新目录、仅权限/属性变化等，原样列出
         esac
     done <<< "$items"
 
@@ -1348,7 +1350,7 @@ copy_dry_run_report() {
         echo "  [新增]          $f"
     done
 
-    local i src_size src_mtime dst_size dst_mtime n_over=0 n_larger=0 n_skip=0
+    local i src_size src_mtime dst_size dst_mtime n_over=0 n_larger=0 n_skip=0 n_unknown=0
     for i in "${!changed[@]}"; do
         f="${changed[$i]}"
         read -r src_size src_mtime <<< "${src_stats[$i]:-}"
@@ -1361,6 +1363,10 @@ copy_dry_run_report() {
         elif [[ "$src_size" != "-" && "$dst_size" != "-" ]] && (( dst_size > src_size )); then
             n_over=$((n_over + 1)); n_larger=$((n_larger + 1))
             echo "  [覆盖!接收端更大] $f"
+        elif [[ "$src_mtime" == "-" || "$dst_mtime" == "-" ]]; then
+            # 读不到状态（如 rsync 转义过的特殊文件名）：可能被覆盖，也可能被 --update 跳过
+            n_over=$((n_over + 1)); n_unknown=$((n_unknown + 1))
+            echo "  [覆盖?状态未知] $f"
         else
             n_over=$((n_over + 1))
             echo "  [覆盖]          $f"
@@ -1369,8 +1375,11 @@ copy_dry_run_report() {
         echo "      源:     $(fmt_stat "$src_size" "$src_mtime")"
         echo "      接收端: $(fmt_stat "$dst_size" "$dst_mtime")"
     done
+    for line in "${other[@]}"; do
+        echo "  [其他]          $line"
+    done
 
-    echo "汇总: 新增 ${#new[@]}，覆盖 $n_over（其中接收端更大 $n_larger），跳过（接收端较新）$n_skip"
+    echo "汇总: 新增 ${#new[@]}，覆盖 $n_over（其中接收端更大 $n_larger，状态未知 $n_unknown），跳过（接收端较新）$n_skip，其他 ${#other[@]}"
     if [[ $n_over -gt 0 ]]; then
         echo "被覆盖的文件将备份到接收端 $SYNC_BACKUP_DIR/<时间戳>/"
     fi

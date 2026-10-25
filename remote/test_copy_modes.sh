@@ -160,6 +160,8 @@ note "DR01 copy-push -n: 区分新增/覆盖并标出接收端更大或更新，
 setup_case "$L" "$R"
 put "$L/restart.out" "abc" $NEW          # 源更新但更短（重新开始的输出）
 put "$R/restart.out" "abcdefgh" $OLD
+ln -s new.txt "$L/link"                  # 新符号链接
+put "$L/mode.sh" "same" $OLD; put "$R/mode.sh" "same" $OLD; chmod +x "$L/mode.sh"   # 仅权限变化
 before=$(cd "$R" && find . -type f -exec stat -c '%n %s %Y' {} + | sort)
 run_sync copy-push -n
 assert_ok "dry-run exit 0" "$LAST_EC" "$LAST_OUT"
@@ -167,8 +169,10 @@ assert_contains "新增" "$LAST_OUT" "[新增]          new.txt"
 assert_contains "普通覆盖" "$LAST_OUT" "[覆盖]          $SUB/energy.bin"
 assert_contains "接收端更大" "$LAST_OUT" "[覆盖!接收端更大] restart.out"
 assert_contains "接收端较新" "$LAST_OUT" "[跳过:接收端较新] dqmc.out"
-assert_contains "汇总" "$LAST_OUT" "汇总: 新增 1，覆盖 2（其中接收端更大 1），跳过（接收端较新）1"
+assert_contains "汇总" "$LAST_OUT" "汇总: 新增 1，覆盖 2（其中接收端更大 1，状态未知 0），跳过（接收端较新）1，其他 2"
 assert_contains "警告" "$LAST_OUT" "警告: 有 1 个文件接收端更大"
+assert_contains "符号链接列为其他" "$LAST_OUT" "+++++++++ link"
+assert_contains "权限变化列为其他" "$LAST_OUT" "p..... mode.sh"
 after=$(cd "$R" && find . -type f -exec stat -c '%n %s %Y' {} + | sort)
 assert_eq "远端未改动" "$before" "$after"
 
