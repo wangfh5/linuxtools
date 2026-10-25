@@ -154,7 +154,7 @@ DEFAULT_REMOTE_BASE="~"
 sync-remote                         # 使用 DEFAULT_MODE
 sync-remote -m push                 # 本地严格镜像到远端
 sync-remote -m pull                 # 远端严格镜像到本地
-sync-remote -m copy-push -n         # 预览一次保留远端文件的推送
+sync-remote -m copy-push -n         # 预览：列出新增/覆盖，标出远端更大或更新的文件
 sync-remote -m handoff              # 把完整工作现场接力到远端
 sync-remote -m reclaim              # 从接力现场归队
 sync-remote -m git-push             # 把本地超前 commits 快进到远端
@@ -170,8 +170,8 @@ sync-remote -h
 | --- | --- | --- | --- |
 | `push` | 本地 → 远端 | 是 | 无冲突检查，先用 `-n` 预览 |
 | `pull` | 远端 → 本地 | 是 | 无冲突检查，先用 `-n` 预览 |
-| `copy-push` | 本地 → 远端 | 否 | 保留远端独有文件 |
-| `copy-pull` | 远端 → 本地 | 否 | 保留本地独有文件 |
+| `copy-push` | 本地 → 远端 | 否 | 保留远端独有文件；不覆盖远端较新的文件；覆盖前备份 |
+| `copy-pull` | 远端 → 本地 | 否 | 保留本地独有文件；不覆盖本地较新的文件；覆盖前备份 |
 | `handoff` | 本地 → 远端 | 否 | 检查远端 Git 状态，有冲突时 fork 新槽位 |
 | `reclaim` | 远端 → 本地 | 否 | 校验本地自 handoff 后没有 tracked 状态变化 |
 | `git-push` | 本地 commits → 远端 | 不适用 | 默认仅允许快进 |
@@ -179,6 +179,35 @@ sync-remote -h
 | `git-sync` | 自动判断 | 不适用 | 仅自动执行单向快进 |
 
 `push` 和 `pull` 会把目标端变成源端的镜像，目标端额外文件会被 `--delete` 删除。名称带 `copy-` 的模式、`handoff` 和 `reclaim` 都不执行删除。
+
+### copy-push / copy-pull：防止旧文件覆盖新数据
+
+rsync 默认只要大小或 mtime 不同就用源端覆盖接收端，不管哪一端更新。对于集群作业持续追加的 `dqmc.out`、`*.bin` 等输出，一次用旧的本地副本做 `copy-push` 就可能覆盖远端的新数据。因此 copy 模式额外使用：
+
+- `--update`：接收端的文件比源端新（mtime 更晚）时跳过，不覆盖。rsync 比较的是 Unix epoch 时间，与两端时区无关；两端时钟需大致同步。
+- `--backup --backup-dir=.sync-backup/<时间戳>`：仍被覆盖的文件，旧版本按原相对路径保存在接收端根目录的 `.sync-backup/<时间戳>/` 下。只有确实覆盖了文件时才会创建该时间戳目录。
+
+`.sync-backup/` 在所有 rsync 模式中都被排除：备份不会被传到另一端，`push`/`pull` 的 `--delete` 也不会删除接收端已有的备份。如果项目是 Git 仓库，可以把 `.sync-backup/` 加入 `.gitignore`。
+
+`--update` 拦不住“接收端内容更多但 mtime 更旧”的情况，例如源端输出被重新开始、mtime 更新但内容更短。这类覆盖仍会发生（旧版本进入备份），所以重要同步前先用 `-n` 预览。copy 模式的预览会对比两端文件的大小和 mtime，逐项标出：
+
+| 标记 | 含义 |
+| --- | --- |
+| `[新增]` | 接收端没有该文件 |
+| `[覆盖]` | 将覆盖接收端文件，旧版本备份到 `.sync-backup/` |
+| `[覆盖!接收端更大]` | 将覆盖，但接收端文件更大，并给出警告；请确认是否应该覆盖 |
+| `[跳过:接收端较新]` | 接收端更新，`--update` 会跳过 |
+
+带标记的警告项会同时显示两端的大小和 mtime。预览需要 `stat`（GNU 或 BSD）和一次额外的 SSH 连接读取远端文件状态。
+
+备份不会自动清理。确认不再需要后，在接收端手动删除，例如：
+
+```bash
+ls .sync-backup/                                           # 查看历次备份
+rm -rf .sync-backup/20261025-*                             # 删除某天的备份
+find .sync-backup -mindepth 1 -maxdepth 1 -mtime +30 -exec rm -rf {} +   # 删除 30 天前的备份
+run-remote rm -rf .sync-backup                             # 清空远端（copy-push 的接收端）全部备份
+```
 
 ### 文件过滤
 
@@ -330,10 +359,11 @@ sync-remote -H mycluster -m git-sync
 
 ### 自测
 
-Git 模式回归测试使用临时 HOME 和假 SSH，不需要连接真实服务器：
+Git 模式与 copy 模式的回归测试都使用临时 HOME 和假 SSH，不需要连接真实服务器：
 
 ```bash
 ./remote/test_git_modes.sh
+./remote/test_copy_modes.sh
 ```
 
 ## run-remote

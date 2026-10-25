@@ -16,6 +16,11 @@ done
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 source "$SCRIPT_DIR/remote_common.sh"
 
+# copy-push/copy-pull 在接收端根目录备份被覆盖的文件；所有 rsync 模式都排除它，
+# 既不传输备份，也不让 push/pull 的 --delete 删掉接收端的备份
+SYNC_BACKUP_DIR=".sync-backup"
+SYNC_BACKUP_EXCLUDE="--exclude=$SYNC_BACKUP_DIR/"
+
 # 初始化工作变量
 init_vars() {
     # 基于配置值初始化工作变量
@@ -133,8 +138,9 @@ show_help() {
     -m, --mode MODE        同步模式 (默认: 配置文件中的 DEFAULT_MODE)
                           push:      本地覆盖远程 (删除远程多余文件)
                           pull:      远程覆盖本地 (删除本地多余文件)
-                          copy-push: 本地复制到远程 (不删除远程文件)
-                          copy-pull: 远程复制到本地 (不删除本地文件)
+                          copy-push: 本地复制到远程 (不删除远程文件；不覆盖远程
+                                     较新的文件，被覆盖的文件备份到 .sync-backup/)
+                          copy-pull: 远程复制到本地 (同上，方向相反)
                           handoff:   接力现场到远程 (冲突感知；远端安全则原位，
                                      否则自动 fork 新槽位；默认按 .gitignore 排除)
                           reclaim:   归队：从远端把 handoff 出去的现场拉回本地
@@ -148,7 +154,8 @@ show_help() {
     -H, --host HOST        远程 SSH host，例如 myserver 或 user@host
                           (默认: DEFAULT_SYNC_HOST，未设置时使用 DEFAULT_REMOTE_HOST)
     -p, --port PORT        SSH 端口 (默认: 配置文件中的 DEFAULT_REMOTE_PORT，通常是 22)
-    -n, --dry-run          预览模式，不实际执行
+    -n, --dry-run          预览模式，不实际执行；copy-* 模式会区分新增/覆盖，
+                           并标出接收端更大或更新的文件
         --suffix SUFFIX    handoff 模式 fork 槽位时的后缀名（默认: 时间戳）
     -f, --force            handoff/reclaim: 跳过安全检查强制覆盖（慎用）
                            git-push/git-sync: 分叉或远端超前时用
@@ -1288,6 +1295,90 @@ RECLAIM_PROBE
     echo
 }
 
+# 把 "大小 mtime(epoch)" 格式化为可读文本；"-" 表示文件不存在或无法 stat
+fmt_stat() {
+    if [[ "$1" == "-" ]]; then
+        echo "不存在/未知"
+    else
+        echo "$1 B, $(date -d "@$2" '+%F %T' 2>/dev/null || date -r "$2" '+%F %T' 2>/dev/null || echo "@$2")"
+    fi
+}
+
+# copy-push/copy-pull 预览：不带 --update 列出全部差异文件，再 stat 两端，
+# 区分新增 / 覆盖（接收端更大时警告）/ 因接收端较新而被 --update 跳过
+copy_dry_run_report() {
+    local opts=(--archive --dry-run "--out-format=%i %n")
+    [[ "$SSH_OPTS_CHANGED" == true ]] && opts+=(-e "$SSH_CMD")
+    local items
+    if ! items=$(rsync "${opts[@]}" "$SYNC_BACKUP_EXCLUDE" "${EXCLUDES[@]}" "$SOURCE" "$DEST"); then
+        echo "预览失败！"
+        exit 1
+    fi
+
+    local line new=() changed=()
+    while IFS= read -r line; do
+        case "$line" in
+            # 推送到远端时为 "<f"（发送），拉取时为 ">f"（接收）
+            [\<\>]f+++*) new+=("${line#* }") ;;
+            [\<\>]f*)    changed+=("${line#* }") ;;
+        esac
+    done <<< "$items"
+
+    local stat_loop='while IFS= read -r f; do stat -c "%s %Y" -- "$f" 2>/dev/null || stat -f "%z %m" -- "$f" 2>/dev/null || echo "- -"; done'
+    local local_stats="" remote_stats=""
+    if [[ ${#changed[@]} -gt 0 ]]; then
+        local_stats=$(printf '%s\n' "${changed[@]}" | (cd "$LOCAL_PATH" && bash -c "$stat_loop"))
+        remote_stats=$(printf '%s\n' "${changed[@]}" | $SSH_CMD "$REMOTE_HOST" \
+            "cd $(shell_quote_remote_path "${REMOTE_TARGET#*:}") && bash -c $(git_shell_quote "$stat_loop")")
+    fi
+    if [[ ${#changed[@]} -gt 0 && -z "$remote_stats" ]]; then
+        echo "警告: 无法读取远端文件状态，以下覆盖项无法判断接收端是否更大或更新"
+    fi
+    local src_raw="$local_stats" dst_raw="$remote_stats"
+    if [[ "$MODE" == "copy-pull" ]]; then
+        src_raw="$remote_stats"; dst_raw="$local_stats"
+    fi
+    local src_stats=() dst_stats=()
+    while IFS= read -r line; do src_stats+=("$line"); done <<< "$src_raw"
+    while IFS= read -r line; do dst_stats+=("$line"); done <<< "$dst_raw"
+
+    local f
+    echo "--- 预览报告（接收端 = $([[ "$MODE" == "copy-push" ]] && echo 远程 || echo 本地)）---"
+    for f in "${new[@]}"; do
+        echo "  [新增]          $f"
+    done
+
+    local i src_size src_mtime dst_size dst_mtime n_over=0 n_larger=0 n_skip=0
+    for i in "${!changed[@]}"; do
+        f="${changed[$i]}"
+        read -r src_size src_mtime <<< "${src_stats[$i]:-}"
+        read -r dst_size dst_mtime <<< "${dst_stats[$i]:-}"
+        src_size="${src_size:--}"; src_mtime="${src_mtime:--}"
+        dst_size="${dst_size:--}"; dst_mtime="${dst_mtime:--}"
+        if [[ "$src_mtime" != "-" && "$dst_mtime" != "-" ]] && (( dst_mtime > src_mtime )); then
+            n_skip=$((n_skip + 1))
+            echo "  [跳过:接收端较新] $f"
+        elif [[ "$src_size" != "-" && "$dst_size" != "-" ]] && (( dst_size > src_size )); then
+            n_over=$((n_over + 1)); n_larger=$((n_larger + 1))
+            echo "  [覆盖!接收端更大] $f"
+        else
+            n_over=$((n_over + 1))
+            echo "  [覆盖]          $f"
+            continue
+        fi
+        echo "      源:     $(fmt_stat "$src_size" "$src_mtime")"
+        echo "      接收端: $(fmt_stat "$dst_size" "$dst_mtime")"
+    done
+
+    echo "汇总: 新增 ${#new[@]}，覆盖 $n_over（其中接收端更大 $n_larger），跳过（接收端较新）$n_skip"
+    if [[ $n_over -gt 0 ]]; then
+        echo "被覆盖的文件将备份到接收端 $SYNC_BACKUP_DIR/<时间戳>/"
+    fi
+    if [[ $n_larger -gt 0 ]]; then
+        echo "警告: 有 $n_larger 个文件接收端更大但不比源新（--update 无法拦截），请确认后再同步"
+    fi
+}
+
 # 执行同步
 perform_sync() {
     # 基本 rsync 参数
@@ -1312,12 +1403,14 @@ perform_sync() {
         copy-push)
             SOURCE="$LOCAL_PATH/"
             DEST="$REMOTE_TARGET"
-            echo "模式: 本地复制到远程 (保留远程文件)"
+            RSYNC_OPTS+=(--update --backup "--backup-dir=$SYNC_BACKUP_DIR/$(date +%Y%m%d-%H%M%S)")
+            echo "模式: 本地复制到远程 (保留远程文件，跳过远程较新的文件，覆盖前备份)"
             ;;
         copy-pull)
             SOURCE="$REMOTE_TARGET/"
             DEST="$LOCAL_PATH"
-            echo "模式: 远程复制到本地 (保留本地文件)"
+            RSYNC_OPTS+=(--update --backup "--backup-dir=$SYNC_BACKUP_DIR/$(date +%Y%m%d-%H%M%S)")
+            echo "模式: 远程复制到本地 (保留本地文件，跳过本地较新的文件，覆盖前备份)"
             ;;
         handoff)
             # REMOTE_TARGET 已由 prepare_handoff() 决定（原位或 fork 槽位）
@@ -1352,8 +1445,14 @@ perform_sync() {
     echo "目标: $DEST"
     echo
 
+    if [[ "$DRY_RUN" == true && ( "$MODE" == "copy-push" || "$MODE" == "copy-pull" ) ]]; then
+        copy_dry_run_report
+        echo "预览完成！"
+        return
+    fi
+
     # 执行 rsync（HANDOFF_EXTRA_OPTS 由 prepare_handoff 填充，如 --filter、--link-dest）
-    rsync "${RSYNC_OPTS[@]}" "${HANDOFF_EXTRA_OPTS[@]}" "${EXCLUDES[@]}" "$SOURCE" "$DEST"
+    rsync "${RSYNC_OPTS[@]}" "$SYNC_BACKUP_EXCLUDE" "${HANDOFF_EXTRA_OPTS[@]}" "${EXCLUDES[@]}" "$SOURCE" "$DEST"
     
     if [ $? -eq 0 ]; then
         if [ "$DRY_RUN" = true ]; then
