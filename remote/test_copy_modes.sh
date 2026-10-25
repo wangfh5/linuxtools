@@ -180,6 +180,22 @@ LAST_OUT=$(cd "$L" && FAKE_SSH_FAIL_STAT=1 bash "$SYNC" -m copy-push -f 2>&1); L
 assert_ok "-f 放行" "$LAST_EC" "$LAST_OUT"
 copy_ok_checks "$R"
 
+note "CP06 copy-push: 单个文件状态未知（rsync 转义的文件名）→ 中止（-f 放行）"
+reset_dirs
+nl=$'odd\nname.out'
+put "$L/$nl" "new-content" $NEW; put "$R/$nl" "old" $OLD
+before=$(snapshot "$R")
+run_sync copy-push
+assert_fail "copy-push 应失败" "$LAST_EC" "$LAST_OUT"
+assert_contains "标为状态未知" "$LAST_OUT" "[拦截:状态未知]"
+assert_eq "远端未改动" "$before" "$(snapshot "$R")"
+run_sync copy-push -n -f
+assert_contains "-n -f 提示将跳过检查" "$LAST_OUT" "实际同步将跳过缩小检查"
+if grep -Fq "实际同步将中止" <<< "$LAST_OUT"; then fail "-n -f 不应提示中止"; else pass "-n -f 无中止提示"; fi
+run_sync copy-push -f
+assert_ok "-f 放行" "$LAST_EC" "$LAST_OUT"
+assert_eq "文件被覆盖" "new-content" "$(cat "$R/$nl")"
+
 # ════════════════════════════════════════════════════════════════
 note "CL01 copy-pull: 跳过本地较新，覆盖更大/同大小的较新源文件"
 setup_case "$R" "$L"

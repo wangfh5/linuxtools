@@ -1396,7 +1396,11 @@ copy_dry_run_report() {
     done
     echo "汇总: 新增 ${#CP_NEW[@]}，覆盖 $(copy_count_class over)，跳过（接收端较新）$(copy_count_class skip)，拦截（源更小 $(copy_count_class shrink)，状态未知 $(copy_count_class unknown)），其他 ${#CP_OTHER[@]}"
     if copy_gate_blocked; then
-        copy_gate_message "实际同步将中止"
+        if [[ "$HANDOFF_FORCE" == true ]]; then
+            echo "已指定 -f：实际同步将跳过缩小检查，以上拦截项也会被覆盖"
+        else
+            copy_gate_message "实际同步将中止"
+        fi
     fi
 }
 
