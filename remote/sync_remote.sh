@@ -133,8 +133,9 @@ show_help() {
     -m, --mode MODE        同步模式 (默认: 配置文件中的 DEFAULT_MODE)
                           push:      本地覆盖远程 (删除远程多余文件)
                           pull:      远程覆盖本地 (删除本地多余文件)
-                          copy-push: 本地复制到远程 (不删除远程文件)
-                          copy-pull: 远程复制到本地 (不删除本地文件)
+                          copy-push: 本地复制到远程 (不删除远程文件；不覆盖远程
+                                     较新的文件；源比远程小时中止，需 -f)
+                          copy-pull: 远程复制到本地 (同上，方向相反)
                           handoff:   接力现场到远程 (冲突感知；远端安全则原位，
                                      否则自动 fork 新槽位；默认按 .gitignore 排除)
                           reclaim:   归队：从远端把 handoff 出去的现场拉回本地
@@ -148,12 +149,15 @@ show_help() {
     -H, --host HOST        远程 SSH host，例如 myserver 或 user@host
                           (默认: DEFAULT_SYNC_HOST，未设置时使用 DEFAULT_REMOTE_HOST)
     -p, --port PORT        SSH 端口 (默认: 配置文件中的 DEFAULT_REMOTE_PORT，通常是 22)
-    -n, --dry-run          预览模式，不实际执行
+    -n, --dry-run          预览模式，不实际执行；copy-* 模式会区分新增/覆盖/跳过，
+                           并标出会导致中止的"源更小"文件
         --suffix SUFFIX    handoff 模式 fork 槽位时的后缀名（默认: 时间戳）
     -f, --force            handoff/reclaim: 跳过安全检查强制覆盖（慎用）
                            git-push/git-sync: 分叉或远端超前时用
                            --force-with-lease 以本地为权威覆盖远端
                            （git-pull 忽略 -f，仍仅 ff-only）
+                           copy-push/copy-pull: 跳过缩小检查，允许用更小的
+                           源文件覆盖接收端
         --include-only PATTERN
                            仅同步匹配 PATTERN 的内容（可重复传入，追加到配置文件的
                            INCLUDE_ONLY 之后）；优先级最高，会忽略所有 EXCLUDE 规则
@@ -1288,6 +1292,144 @@ RECLAIM_PROBE
     echo
 }
 
+# 把 "大小 mtime(epoch)" 格式化为可读文本；"-" 表示文件不存在或无法 stat
+fmt_stat() {
+    if [[ "${1:--}" == "-" ]]; then
+        echo "不存在/未知"
+    else
+        echo "$1 B, $(date -d "@$2" '+%F %T' 2>/dev/null || date -r "$2" '+%F %T' 2>/dev/null || echo "@$2")"
+    fi
+}
+
+# copy-push/copy-pull 分类（预览报告和缩小检查共用）：不带 --update 列出全部差异项，
+# 再 stat 两端，把每个将被传输的已有文件归为
+#   skip    接收端较新，--update 会跳过
+#   shrink  源比接收端小（且不会被跳过）—— 会丢数据，需 -f
+#   over    正常覆盖（源不小于接收端）
+#   unknown 读不到某端状态，无法判断
+# 结果写入全局：CP_NEW CP_OTHER CP_FILES CP_CLASS CP_SRC CP_DST CP_REMOTE_STAT_OK
+copy_classify() {
+    local opts=(--archive --dry-run "--out-format=%i %n")
+    [[ "$SSH_OPTS_CHANGED" == true ]] && opts+=(-e "$SSH_CMD")
+    local items
+    if ! items=$(rsync "${opts[@]}" "${EXCLUDES[@]}" "$SOURCE" "$DEST"); then
+        echo "错误: 预检 rsync 失败"
+        exit 1
+    fi
+
+    CP_NEW=(); CP_OTHER=(); CP_FILES=(); CP_CLASS=(); CP_SRC=(); CP_DST=()
+    CP_REMOTE_STAT_OK=true
+    local line
+    while IFS= read -r line; do
+        case "$line" in
+            # 推送到远端时为 "<f"（发送），拉取时为 ">f"（接收）
+            [\<\>]f+++*) CP_NEW+=("${line#* }") ;;
+            [\<\>]f*)    CP_FILES+=("${line#* }") ;;
+            .d*|"")       ;;  # 仅目录属性变化，不列出
+            *)            CP_OTHER+=("$line") ;;  # 符号链接、新目录、仅权限/属性变化等，原样列出
+        esac
+    done <<< "$items"
+    [[ ${#CP_FILES[@]} -eq 0 ]] && return
+
+    local stat_loop='while IFS= read -r f; do stat -c "%s %Y" -- "$f" 2>/dev/null || stat -f "%z %m" -- "$f" 2>/dev/null || echo "- -"; done'
+    local local_stats remote_stats
+    local_stats=$(printf '%s\n' "${CP_FILES[@]}" | (cd "$LOCAL_PATH" && bash -c "$stat_loop"))
+    if ! remote_stats=$(printf '%s\n' "${CP_FILES[@]}" | $SSH_CMD "$REMOTE_HOST" \
+            "cd $(shell_quote_remote_path "${REMOTE_TARGET#*:}") && bash -c $(git_shell_quote "$stat_loop")"); then
+        CP_REMOTE_STAT_OK=false
+    fi
+    local src_raw="$local_stats" dst_raw="$remote_stats"
+    if [[ "$MODE" == "copy-pull" ]]; then
+        src_raw="$remote_stats"; dst_raw="$local_stats"
+    fi
+    while IFS= read -r line; do CP_SRC+=("$line"); done <<< "$src_raw"
+    while IFS= read -r line; do CP_DST+=("$line"); done <<< "$dst_raw"
+
+    local i src_size src_mtime dst_size dst_mtime
+    for i in "${!CP_FILES[@]}"; do
+        read -r src_size src_mtime <<< "${CP_SRC[$i]:-}"
+        read -r dst_size dst_mtime <<< "${CP_DST[$i]:-}"
+        if [[ "${src_mtime:--}" == "-" || "${dst_mtime:--}" == "-" ]]; then
+            CP_CLASS[$i]=unknown
+        elif (( dst_mtime > src_mtime )); then
+            CP_CLASS[$i]=skip
+        elif (( src_size < dst_size )); then
+            CP_CLASS[$i]=shrink
+        else
+            CP_CLASS[$i]=over
+        fi
+    done
+}
+
+# 打印 CP_FILES 中属于给定分类的文件；非 over 项附两端大小与 mtime
+copy_print_class() {
+    local cls="$1" label="$2" i
+    for i in "${!CP_FILES[@]}"; do
+        [[ "${CP_CLASS[$i]}" == "$cls" ]] || continue
+        echo "  $label ${CP_FILES[$i]}"
+        [[ "$cls" == over ]] && continue
+        echo "      源:     $(fmt_stat ${CP_SRC[$i]:-})"
+        echo "      接收端: $(fmt_stat ${CP_DST[$i]:-})"
+    done
+}
+
+copy_count_class() {
+    local c n=0
+    for c in "${CP_CLASS[@]}"; do [[ "$c" == "$1" ]] && n=$((n + 1)); done
+    echo "$n"
+}
+
+# copy 模式 dry-run：完整分类报告
+copy_dry_run_report() {
+    copy_classify
+    echo "--- 预览报告（接收端 = $([[ "$MODE" == "copy-push" ]] && echo 远程 || echo 本地)）---"
+    local f line
+    for f in "${CP_NEW[@]}"; do
+        echo "  [新增]          $f"
+    done
+    copy_print_class over    "[覆盖]         "
+    copy_print_class skip    "[跳过:接收端较新]"
+    copy_print_class shrink  "[拦截:源更小]   "
+    copy_print_class unknown "[拦截:状态未知] "
+    for line in "${CP_OTHER[@]}"; do
+        echo "  [其他]          $line"
+    done
+    echo "汇总: 新增 ${#CP_NEW[@]}，覆盖 $(copy_count_class over)，跳过（接收端较新）$(copy_count_class skip)，拦截（源更小 $(copy_count_class shrink)，状态未知 $(copy_count_class unknown)），其他 ${#CP_OTHER[@]}"
+    if copy_gate_blocked; then
+        if [[ "$HANDOFF_FORCE" == true ]]; then
+            echo "已指定 -f：实际同步将跳过缩小检查，以上拦截项也会被覆盖"
+        else
+            copy_gate_message "实际同步将中止"
+        fi
+    fi
+}
+
+# 分类后判断是否需要拦截：远端状态读取失败，或存在 shrink / unknown 项
+copy_gate_blocked() {
+    [[ "$CP_REMOTE_STAT_OK" != true ]] || (( $(copy_count_class shrink) + $(copy_count_class unknown) > 0 ))
+}
+
+copy_gate_message() {
+    [[ "$CP_REMOTE_STAT_OK" == true ]] || echo "错误: 无法读取远端文件状态，不能确认是否会用更小的文件覆盖接收端"
+    echo "$1：有文件会被更小的源文件覆盖或无法确认（确认无误后用 -f 强制同步）"
+}
+
+# copy 模式实际同步前的缩小检查：源更小或状态未知时中止（-f 跳过）
+copy_shrink_gate() {
+    if [[ "$HANDOFF_FORCE" == true ]]; then
+        echo "已指定 -f：跳过缩小检查，接收端较大的文件也会被覆盖"
+        return
+    fi
+    copy_classify
+    if copy_gate_blocked; then
+        echo "缩小检查未通过："
+        copy_print_class shrink  "[拦截:源更小]   "
+        copy_print_class unknown "[拦截:状态未知] "
+        copy_gate_message "同步已中止，未传输任何文件"
+        exit 1
+    fi
+}
+
 # 执行同步
 perform_sync() {
     # 基本 rsync 参数
@@ -1312,12 +1454,14 @@ perform_sync() {
         copy-push)
             SOURCE="$LOCAL_PATH/"
             DEST="$REMOTE_TARGET"
-            echo "模式: 本地复制到远程 (保留远程文件)"
+            RSYNC_OPTS+=(--update)
+            echo "模式: 本地复制到远程 (保留远程文件，跳过远程较新的文件)"
             ;;
         copy-pull)
             SOURCE="$REMOTE_TARGET/"
             DEST="$LOCAL_PATH"
-            echo "模式: 远程复制到本地 (保留本地文件)"
+            RSYNC_OPTS+=(--update)
+            echo "模式: 远程复制到本地 (保留本地文件，跳过本地较新的文件)"
             ;;
         handoff)
             # REMOTE_TARGET 已由 prepare_handoff() 决定（原位或 fork 槽位）
@@ -1351,6 +1495,15 @@ perform_sync() {
     echo "源: $SOURCE"
     echo "目标: $DEST"
     echo
+
+    if [[ "$MODE" == "copy-push" || "$MODE" == "copy-pull" ]]; then
+        if [[ "$DRY_RUN" == true ]]; then
+            copy_dry_run_report
+            echo "预览完成！"
+            return
+        fi
+        copy_shrink_gate
+    fi
 
     # 执行 rsync（HANDOFF_EXTRA_OPTS 由 prepare_handoff 填充，如 --filter、--link-dest）
     rsync "${RSYNC_OPTS[@]}" "${HANDOFF_EXTRA_OPTS[@]}" "${EXCLUDES[@]}" "$SOURCE" "$DEST"

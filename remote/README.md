@@ -154,7 +154,7 @@ DEFAULT_REMOTE_BASE="~"
 sync-remote                         # 使用 DEFAULT_MODE
 sync-remote -m push                 # 本地严格镜像到远端
 sync-remote -m pull                 # 远端严格镜像到本地
-sync-remote -m copy-push -n         # 预览一次保留远端文件的推送
+sync-remote -m copy-push -n         # 预览：列出新增/覆盖/跳过，标出会导致中止的文件
 sync-remote -m handoff              # 把完整工作现场接力到远端
 sync-remote -m reclaim              # 从接力现场归队
 sync-remote -m git-push             # 把本地超前 commits 快进到远端
@@ -170,8 +170,8 @@ sync-remote -h
 | --- | --- | --- | --- |
 | `push` | 本地 → 远端 | 是 | 无冲突检查，先用 `-n` 预览 |
 | `pull` | 远端 → 本地 | 是 | 无冲突检查，先用 `-n` 预览 |
-| `copy-push` | 本地 → 远端 | 否 | 保留远端独有文件 |
-| `copy-pull` | 远端 → 本地 | 否 | 保留本地独有文件 |
+| `copy-push` | 本地 → 远端 | 否 | 保留远端独有文件；不覆盖远端较新的文件；源更小时中止 |
+| `copy-pull` | 远端 → 本地 | 否 | 保留本地独有文件；不覆盖本地较新的文件；源更小时中止 |
 | `handoff` | 本地 → 远端 | 否 | 检查远端 Git 状态，有冲突时 fork 新槽位 |
 | `reclaim` | 远端 → 本地 | 否 | 校验本地自 handoff 后没有 tracked 状态变化 |
 | `git-push` | 本地 commits → 远端 | 不适用 | 默认仅允许快进 |
@@ -179,6 +179,26 @@ sync-remote -h
 | `git-sync` | 自动判断 | 不适用 | 仅自动执行单向快进 |
 
 `push` 和 `pull` 会把目标端变成源端的镜像，目标端额外文件会被 `--delete` 删除。名称带 `copy-` 的模式、`handoff` 和 `reclaim` 都不执行删除。
+
+### copy-push / copy-pull：防止旧文件覆盖新数据
+
+rsync 默认只要大小或 mtime 不同就用源端覆盖接收端，不管哪一端更新。对于集群作业持续追加的 `dqmc.out`、`*.bin` 等输出，一次用旧的本地副本做 `copy-push` 就可能覆盖远端的新数据。因此 copy 模式有两层保护：
+
+- `--update`：接收端的文件比源端新（mtime 更晚）时跳过，不覆盖。rsync 比较的是 Unix epoch 时间，与两端时区无关；两端时钟需大致同步。源更新且不小于接收端（正常追加增长、定长重写）照常覆盖。
+- 缩小检查：`--update` 拦不住“源更新但更小”的情况，例如输出被重新开始、内容比接收端的旧版本短。实际同步前会先预检一遍（额外一次 rsync dry run 和一次读取远端文件状态的 SSH 连接）；只要有文件会被更小的源文件覆盖，或远端文件状态读取失败，就列出这些文件并整体中止（非零退出，不传输任何文件）。确认无误后用 `-f` 跳过检查强制同步。
+
+`-n` 预览会做同样的分类，逐项标出：
+
+| 标记 | 含义 |
+| --- | --- |
+| `[新增]` | 接收端没有该文件 |
+| `[覆盖]` | 源更新且不小于接收端，将覆盖 |
+| `[跳过:接收端较新]` | 接收端更新，`--update` 会跳过 |
+| `[拦截:源更小]` | 源更小（且不会被跳过），实际同步会中止，需 `-f` |
+| `[拦截:状态未知]` | 读不到某端的文件状态（如含换行等特殊字符的文件名），实际同步会中止，需 `-f` |
+| `[其他]` | 符号链接、新目录、仅权限/属性变化等非普通文件改动，原样显示 rsync 的 itemize 输出 |
+
+跳过和拦截项会同时显示两端的大小和 mtime。读取文件状态需要两端有 `stat`（GNU 或 BSD）。
 
 ### 文件过滤
 
@@ -330,10 +350,11 @@ sync-remote -H mycluster -m git-sync
 
 ### 自测
 
-Git 模式回归测试使用临时 HOME 和假 SSH，不需要连接真实服务器：
+Git 模式与 copy 模式的回归测试都使用临时 HOME 和假 SSH，不需要连接真实服务器：
 
 ```bash
 ./remote/test_git_modes.sh
+./remote/test_copy_modes.sh
 ```
 
 ## run-remote
